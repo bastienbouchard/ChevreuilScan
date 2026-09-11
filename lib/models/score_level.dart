@@ -19,8 +19,8 @@ extension ScoreLevelStyle on ScoreLevel {
 }
 
 ScoreLevel scoreLevelFromRatio(double ratio) {
-  if (ratio >= 0.55) return ScoreLevel.excellent;
-  if (ratio >= 0.35) return ScoreLevel.bon;
-  if (ratio >= 0.18) return ScoreLevel.moyen;
+  if (ratio >= 0.50) return ScoreLevel.excellent;
+  if (ratio >= 0.32) return ScoreLevel.bon;
+  if (ratio >= 0.16) return ScoreLevel.moyen;
   return ScoreLevel.faible;
 }

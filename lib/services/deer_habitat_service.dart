@@ -1,15 +1,38 @@
 import '../models/habitat_score.dart';
 import '../models/season.dart';
 
-const int _maxPreRut = 30;
+const int _maxPreRut = 33;
 const int _maxRut = 22;
-const int _maxPostRut = 26;
+const int _maxPostRut = 35;
 
 int _maxForSeason(Season season) => switch (season) {
       Season.preRut => _maxPreRut,
       Season.rut => _maxRut,
       Season.postRut => _maxPostRut,
     };
+
+// Classes d'âge jeunes (régulier ou irrégulier), codes MFFP réels.
+bool _isJeune(String age) => age == '10' || age == 'J' || age == 'JIN' || age == 'JIR';
+
+// Peuplement mature/suranné (Forestier en chef : abri hivernal = "mature à suranné").
+bool _isMature(String age) {
+  final n = int.tryParse(age);
+  if (n != null) return n >= 50;
+  return age == 'VIR' || age == 'VIN';
+}
+
+// cl_drai réel est un code à 1 ou 2 chiffres (ex. '30', '40', '60') — le
+// premier chiffre porte la classe de drainage MFFP (0 = excessif, 6 = inondé).
+bool _isHumide(String drai) =>
+    drai.isNotEmpty && ['4', '5', '6'].contains(drai[0]);
+
+// Norme de stratification écoforestière MFFP (tableau 14) : classes 1 à 4
+// couvrent 7 m et plus (le seuil de hauteur minimal pour un abri hivernal
+// selon le Forestier en chef) ; 5-7 couvrent moins de 7 m.
+bool _hauteurSeptMetresPlus(String haut) {
+  final n = int.tryParse(haut);
+  return n != null && n <= 4;
+}
 
 /// Calcule le score d'habitat pour le chevreuil à partir des attributs
 /// écoforestiers du MFFP (même schéma que CARTE_ECO_MAJ_PROV.gpkg).
@@ -29,6 +52,7 @@ HabitatScore scoreDeerHabitat(
   final age = (props['cl_age'] ?? '').toString().toUpperCase();
   final drai = (props['cl_drai'] ?? '').toString();
   final dens = (props['cl_dens'] ?? '').toString().toUpperCase();
+  final haut = (props['cl_haut'] ?? '').toString();
   final pente = (props['cl_pent'] ?? '').toString().toUpperCase();
   final typeEco = (props['type_eco'] ?? '').toString().toUpperCase();
   final codeCouv = (props['code_couv'] ?? '').toString().toUpperCase();
@@ -44,7 +68,8 @@ HabitatScore scoreDeerHabitat(
   int score = switch (season) {
     Season.preRut => _scorePreRut(couv, ess, origine, age, drai, dens, reasons),
     Season.rut => _scoreRut(couv, ess, age, dens, pente, reasons, neighborProps),
-    Season.postRut => _scorePostRut(couv, ess, dens, drai, reasons),
+    Season.postRut =>
+      _scorePostRut(couv, ess, age, dens, haut, drai, reasons, neighborProps),
   };
 
   if (typeEco.contains('AGR') || codeCouv.contains('AGR')) {
@@ -77,28 +102,33 @@ int _scorePreRut(
     reasons.add('Peuplement mixte');
   }
 
-  if (ess.contains('PE')) {
+  if (ess.contains('PE') || ess.contains('PT')) {
     score += 5;
-    reasons.add('Tremble — nourriture de prédilection en pré-rut');
+    reasons.add('Tremble/peuplier — nourriture de prédilection en pré-rut');
   }
   if (ess.contains('BP') || ess.contains('BJ')) {
     score += 4;
     reasons.add('Bouleau — feuillage et brindilles appétents');
   }
-  if (ess.contains('ERR') || ess.contains('ERS')) {
+  if (ess.contains('ER') || ess.contains('ES')) {
     score += 3;
     reasons.add('Érable — feuillage recherché');
+  }
+  if (ess.contains('FR') || ess.contains('FH')) {
+    score += 3;
+    reasons.add('Frêne — essence de nourriture reconnue (Forestier en chef)');
   }
   if (ess.contains('AU') || ess.contains('SA')) {
     score += 3;
     reasons.add('Aulnaie/saulaie — repousse arbustive');
   }
 
-  final coupeJeune = origine == 'CP' && (age == '10' || age == 'J' || age == 'JIN');
-  if (coupeJeune) {
+  final ageJeune = _isJeune(age);
+  final coupeRecente = origine.contains('CP');
+  if (coupeRecente && ageJeune) {
     score += 6;
     reasons.add('Coupe récente (3-10 ans) — régénération abondante');
-  } else if (origine == 'CP' && age == '20') {
+  } else if (coupeRecente && age == '20') {
     score += 3;
     reasons.add('Coupe en régénération avancée');
   }
@@ -108,7 +138,7 @@ int _scorePreRut(
     reasons.add('Couvert clairsemé — accès facile aux arbustes');
   }
 
-  if (drai == '4' || drai == '5' || drai == '6') {
+  if (_isHumide(drai)) {
     score += 3;
     reasons.add('Milieu humide à proximité');
   }
@@ -154,12 +184,12 @@ int _scoreRut(
     reasons.add('Couvert dense — sécurité pour les déplacements');
   }
 
-  if (age == 'J' || age == 'JIN' || age == '10' || age == '20') {
+  if (_isJeune(age) || age == '20') {
     score += 2;
     reasons.add('Jeune peuplement voisin — zone d\'alimentation pour les femelles');
   }
 
-  if (ess.contains('PE') || ess.contains('BP')) {
+  if (ess.contains('PE') || ess.contains('PT') || ess.contains('BP')) {
     score += 2;
     reasons.add('Feuillus tendres présents — attire les femelles');
   }
@@ -170,38 +200,70 @@ int _scoreRut(
 int _scorePostRut(
   String couv,
   String ess,
+  String age,
   String dens,
+  String haut,
   String drai,
   List<String> reasons,
+  List<Map>? neighborProps,
 ) {
   int score = 0;
 
-  if (ess.contains('SAB')) {
-    score += 6;
+  if (ess.contains('SB')) {
+    score += 5;
     reasons.add('Sapin baumier — couvert thermique hivernal');
   }
   if (ess.contains('TO')) {
-    score += 6;
+    score += 5;
     reasons.add('Cèdre — ravage à chevreuils classique');
   }
-  if (ess.contains('PE')) {
+  if (ess.contains('EN') || ess.contains('EB')) {
     score += 3;
+    reasons.add('Épinette — essence de ravage (Forestier en chef)');
+  }
+  if (ess.contains('PE') || ess.contains('PT')) {
+    score += 2;
     reasons.add('Tremble — écorce et brindilles disponibles en hiver');
   }
 
-  if (couv == 'R') {
-    score += 4;
+  // Seuil MFFP : fermeture de couvert résineux ≥ 70 % pour un abri hivernal.
+  if (couv == 'R' && dens == 'D') {
+    score += 6;
+    reasons.add('Couvert résineux ≥ 80 % — dépasse le seuil MFFP de 70 % pour un ravage');
+  } else if (couv == 'R' && dens == 'C') {
+    score += 3;
+    reasons.add('Couvert résineux modérément dense (60-79 %)');
+  } else if (couv == 'R') {
+    score += 1;
     reasons.add('Peuplement résineux — protection contre le froid et le vent');
   }
 
-  if (dens == 'C' || dens == 'D') {
-    score += 5;
-    reasons.add('Couvert dense — zone de refuge hivernal');
+  if (couv == 'R' && _hauteurSeptMetresPlus(haut)) {
+    score += 4;
+    reasons.add('Hauteur ≥ 7 m — bonne interception de la neige (seuil MFFP)');
   }
 
-  if (drai == '3' || drai == '4') {
+  if (couv == 'R' && _isMature(age)) {
+    score += 3;
+    reasons.add('Peuplement mature à suranné — meilleure protection contre le vent et la neige');
+  }
+
+  if (drai.isNotEmpty && (drai[0] == '3' || drai[0] == '4')) {
     score += 2;
     reasons.add('Zone basse abritée');
+  }
+
+  // Entremêlement abri-nourriture (< 300-400 m selon le Forestier en chef).
+  if (couv == 'R' && neighborProps != null && neighborProps.isNotEmpty) {
+    final foodNearby = neighborProps.any((p) {
+      final nCouv = (p['type_couv'] ?? '').toString().toUpperCase();
+      final nAge = (p['cl_age'] ?? '').toString().toUpperCase();
+      return nCouv == 'F' || nCouv == 'M' || _isJeune(nAge);
+    });
+    if (foodNearby) {
+      score += 5;
+      reasons.add('Nourriture feuillue à proximité — entremêlement abri-nourriture (< 400 m)');
+    }
   }
 
   return score;

@@ -55,15 +55,34 @@ void main() {
   });
 
   group('scoreDeerHabitat — post-rut', () {
-    test('cèdre dense = excellent refuge hivernal', () {
+    test('cèdre dense mature = excellent refuge hivernal', () {
       final result = scoreDeerHabitat({
         'type_couv': 'R',
         'gr_ess': 'TO',
         'cl_dens': 'D',
+        'cl_age': '70',
+        'cl_haut': '3',
         'cl_drai': '3',
       }, Season.postRut);
 
       expect(result.level, ScoreLevel.excellent);
+    });
+
+    test('résineux dense avec nourriture feuillue voisine = bonus entremêlement', () {
+      final withNeighbor = scoreDeerHabitat(
+        {'type_couv': 'R', 'gr_ess': 'SB', 'cl_dens': 'D', 'cl_haut': '3'},
+        Season.postRut,
+        neighborProps: [
+          {'type_couv': 'F'},
+        ],
+      );
+      final withoutNeighbor = scoreDeerHabitat(
+        {'type_couv': 'R', 'gr_ess': 'SB', 'cl_dens': 'D', 'cl_haut': '3'},
+        Season.postRut,
+      );
+
+      expect(withNeighbor.value, greaterThan(withoutNeighbor.value));
+      expect(withNeighbor.reasons.any((r) => r.contains('entremêlement')), isTrue);
     });
 
     test('feuillu jeune sans conifère = faible en post-rut', () {
