@@ -1,0 +1,70 @@
+workflows:
+  android-release:
+    name: Android Release — Play Store
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    environment:
+      groups:
+        - CS_Android
+      flutter: stable
+    scripts:
+      - name: Flutter packages
+        script: flutter packages pub get
+      - name: Build AAB
+        script: flutter build appbundle --release
+    artifacts:
+      - build/app/outputs/bundle/release/*.aab
+
+  ios-release:
+    name: iOS Release — TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    environment:
+      groups:
+        - BB
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Set up keychain
+        script: keychain initialize
+      - name: Fetch signing files
+        script: |
+          app-store-connect fetch-signing-files \
+            com.bastienbouchard.chevreuilscan \
+            --type IOS_APP_STORE \
+            --create
+      - name: Add certificates to keychain
+        script: keychain add-certificates
+      - name: Set up code signing
+        script: xcode-project use-profiles
+      - name: Flutter packages
+        script: flutter packages pub get
+      - name: Build IPA
+        script: |
+          flutter build ipa \
+            --release \
+            --export-options-plist=/Users/builder/export_options.plist
+      - name: Clean up keychain
+        script: keychain lock
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        submit_to_app_store: false

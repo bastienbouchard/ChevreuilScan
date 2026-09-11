@@ -5,8 +5,27 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// Génère key.properties depuis les variables d'environnement Codemagic
+def keystoreB64 = System.getenv("CM_KEYSTORE_B64")
+def keystorePath = "/tmp/chevreuilscan-keystore.jks"
+if (keystoreB64 != null) {
+    def keystoreBytes = keystoreB64.decodeBase64()
+    new File(keystorePath).bytes = keystoreBytes
+    new File(rootDir, "app/key.properties").text =
+        "storeFile=$keystorePath\n" +
+        "storePassword=${System.getenv('MY_STORE_PASSWORD') ?: ''}\n" +
+        "keyAlias=${System.getenv('MY_KEY_ALIAS') ?: 'chevreuilscan'}\n" +
+        "keyPassword=${System.getenv('MY_KEY_PASSWORD') ?: ''}\n"
+}
+
+def keyPropsFile = new File(rootDir, "app/key.properties")
+def keyProps = new Properties()
+if (keyPropsFile.exists()) {
+    keyProps.load(new FileInputStream(keyPropsFile))
+}
+
 android {
-    namespace = "com.chevreuilscan.chevreuilscan"
+    namespace = "com.bastienbouchard.chevreuilscan"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +40,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.chevreuilscan.chevreuilscan"
+        applicationId = "com.bastienbouchard.chevreuilscan"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -30,11 +49,18 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        release {
+            storeFile keyProps['storeFile'] ? file(keyProps['storeFile']) : null
+            storePassword keyProps['storePassword']
+            keyAlias keyProps['keyAlias']
+            keyPassword keyProps['keyPassword']
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            signingConfig = keyPropsFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
     }
 }

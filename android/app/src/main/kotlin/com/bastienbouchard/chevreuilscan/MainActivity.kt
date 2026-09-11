@@ -1,4 +1,4 @@
-package com.chevreuilscan.chevreuilscan
+package com.bastienbouchard.chevreuilscan
 
 import io.flutter.embedding.android.FlutterActivity
 

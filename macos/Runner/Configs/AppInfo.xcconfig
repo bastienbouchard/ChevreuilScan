@@ -8,7 +8,7 @@
 PRODUCT_NAME = chevreuilscan
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.chevreuilscan.chevreuilscan
+PRODUCT_BUNDLE_IDENTIFIER = com.bastienbouchard.chevreuilscan
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.chevreuilscan. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 com.bastienbouchard. All rights reserved.
