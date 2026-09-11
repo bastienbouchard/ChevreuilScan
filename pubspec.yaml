@@ -61,6 +61,7 @@ flutter:
 
   assets:
     - assets/sample_eco.geojson
+    - assets/ravages_cerf.geojson
 
   # To add assets to your application, add an assets section, like this:
   # assets:

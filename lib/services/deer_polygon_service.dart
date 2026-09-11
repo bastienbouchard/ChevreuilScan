@@ -48,6 +48,23 @@ EcoFeature? findFeatureAtPoint(List<EcoFeature> features, LatLng point) {
   return null;
 }
 
+// Limites d'un ravage (aire de confinement légale du cerf, MFFP) : contour
+// visible en tout temps, sans remplissage, distinct de la couleur du score.
+List<Polygon> buildRavagePolygons(List<EcoFeature> ravages) {
+  final result = <Polygon>[];
+  for (final ravage in ravages) {
+    for (final ring in ravage.rings) {
+      result.add(Polygon(
+        points: ring,
+        color: const Color(0x00000000),
+        borderColor: const Color(0xFF6A1B9A),
+        borderStrokeWidth: 2.5,
+      ));
+    }
+  }
+  return result;
+}
+
 LatLngBounds boundsFromFeatures(List<EcoFeature> features) {
   double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
   for (final feature in features) {

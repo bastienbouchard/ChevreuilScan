@@ -23,7 +23,9 @@ class _MapPageState extends State<MapPage> {
 
   Season _season = Season.preRut;
   List<EcoFeature> _features = [];
+  List<EcoFeature> _ravages = [];
   List<Polygon> _polygons = [];
+  List<Polygon> _ravagePolygons = [];
   bool _loading = true;
   LatLngBounds? _bounds;
 
@@ -34,12 +36,16 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _loadData() async {
-    final jsonStr = await rootBundle.loadString('assets/sample_eco.geojson');
-    final features = await compute(parseEcoFeaturesIsolate, jsonStr);
+    final ecoJson = await rootBundle.loadString('assets/sample_eco.geojson');
+    final ravageJson = await rootBundle.loadString('assets/ravages_cerf.geojson');
+    final features = await compute(parseEcoFeaturesIsolate, ecoJson);
+    final ravages = await compute(parseEcoFeaturesIsolate, ravageJson);
     setState(() {
       _features = features;
+      _ravages = ravages;
       _bounds = boundsFromFeatures(features);
       _polygons = buildDeerPolygons(features, _season);
+      _ravagePolygons = buildRavagePolygons(ravages);
       _loading = false;
     });
   }
@@ -55,10 +61,11 @@ class _MapPageState extends State<MapPage> {
     final feature = findFeatureAtPoint(_features, point);
     if (feature == null) return;
     final score = scoreDeerHabitat(feature.props, _season);
-    _showExplanationSheet(score);
+    final ravage = findFeatureAtPoint(_ravages, point);
+    _showExplanationSheet(score, ravage);
   }
 
-  void _showExplanationSheet(HabitatScore score) {
+  void _showExplanationSheet(HabitatScore score, EcoFeature? ravage) {
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
@@ -101,6 +108,39 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
                 ),
+              if (ravage != null) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6A1B9A).withValues(alpha: 0.08),
+                    border: Border.all(color: const Color(0xFF6A1B9A)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: const [
+                          Icon(Icons.gavel, size: 18, color: Color(0xFF6A1B9A)),
+                          SizedBox(width: 6),
+                          Text(
+                            'Ravage légal (MFFP)',
+                            style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF6A1B9A)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Aire de confinement officielle du cerf de Virginie'
+                        '${ravage.props['TOPONYME'] != null ? ' — ${ravage.props['TOPONYME']}' : ''}. '
+                        'Certaines activités y sont légalement restreintes du 1er décembre au 1er mai. '
+                        'Vérifie la réglementation applicable avant de chasser dans ce secteur.',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -129,6 +169,7 @@ class _MapPageState extends State<MapPage> {
                       userAgentPackageName: 'com.chevreuilscan.chevreuilscan',
                     ),
                     PolygonLayer(polygons: _polygons),
+                    PolygonLayer(polygons: _ravagePolygons),
                   ],
                 ),
                 Positioned(
@@ -197,7 +238,23 @@ class _Legend extends StatelessWidget {
                       ],
                     ),
                   ))
-              .toList(),
+              .toList()
+            ..add(Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFF6A1B9A), width: 2),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text('Ravage légal (MFFP)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+            )),
         ),
       ),
     );
