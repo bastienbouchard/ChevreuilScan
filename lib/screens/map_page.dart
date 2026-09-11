@@ -1,8 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -10,6 +8,7 @@ import '../models/champ.dart';
 import '../models/habitat_score.dart';
 import '../models/score_level.dart';
 import '../models/season.dart';
+import '../providers/arcgis_export_tile_provider.dart';
 import '../services/champ_polygon_service.dart';
 import '../services/champ_storage_service.dart';
 import '../services/deer_habitat_service.dart';
@@ -38,10 +37,8 @@ class _MapPageState extends State<MapPage> {
 
   Season _season = Season.preRut;
   List<EcoFeature> _features = [];
-  List<EcoFeature> _ravages = [];
   List<Champ> _champs = [];
   List<Polygon> _polygons = [];
-  List<Polygon> _ravagePolygons = [];
   List<Polygon> _champPolygons = [];
   bool _loading = true;
   bool _loadingTiles = false;
@@ -54,9 +51,16 @@ class _MapPageState extends State<MapPage> {
   // Couche de fond et sources satellite/topo — même principe qu'EcoMap.
   String _baseLayer = 'osm'; // 'osm' | 'satellite' | 'topo'
   String _satSource = 'esri'; // 'esri' | 'sentinel' | 'mern'
+  double _baseOpacity = 1.0;
   bool _ecoVisible = true;
   double _ecoOpacity = 0.55;
+  bool _terresPriveesVisible = false;
+  double _terresPriveesOpacity = 0.7;
   bool _showLayerPanel = false;
+
+  final _terresPriveesTileProvider = ArcGISExportTileProvider(
+    mapServerUrl: 'https://geo.environnement.gouv.qc.ca/donnees/rest/services/Reference/Cadastre_allege/MapServer',
+  );
 
   String _tileUrlTemplate() {
     switch (_baseLayer) {
@@ -94,13 +98,9 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _loadData() async {
-    final ravageJson = await rootBundle.loadString('assets/ravages_cerf.geojson');
-    final ravages = await compute(parseEcoFeaturesIsolate, ravageJson);
     final champs = await loadChamps();
     setState(() {
-      _ravages = ravages;
       _champs = champs;
-      _ravagePolygons = buildRavagePolygons(ravages);
       _champPolygons = buildChampPolygons(champs, _season, DateTime.now());
       _loading = false;
     });
@@ -164,6 +164,11 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng point) {
+    if (_showLayerPanel) {
+      setState(() => _showLayerPanel = false);
+      return;
+    }
+
     if (_drawingField) {
       setState(() => _drawingPoints = [..._drawingPoints, point]);
       return;
@@ -172,18 +177,17 @@ class _MapPageState extends State<MapPage> {
     final champ = findChampAtPoint(_champs, point);
     if (champ != null) {
       final score = scoreField(champ, _season, DateTime.now());
-      _showExplanationSheet(score, null, subtitle: champ.crop.label);
+      _showExplanationSheet(score, subtitle: champ.crop.label);
       return;
     }
 
     final feature = findFeatureAtPoint(_features, point);
     if (feature == null) return;
     final score = scoreDeerHabitat(feature.props, _season);
-    final ravage = findFeatureAtPoint(_ravages, point);
-    _showExplanationSheet(score, ravage);
+    _showExplanationSheet(score);
   }
 
-  void _showExplanationSheet(HabitatScore score, EcoFeature? ravage, {String? subtitle}) {
+  void _showExplanationSheet(HabitatScore score, {String? subtitle}) {
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
@@ -226,39 +230,6 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
                 ),
-              if (ravage != null) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF6A1B9A).withValues(alpha: 0.08),
-                    border: Border.all(color: const Color(0xFF6A1B9A)),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: const [
-                          Icon(Icons.gavel, size: 18, color: Color(0xFF6A1B9A)),
-                          SizedBox(width: 6),
-                          Text(
-                            'Ravage légal (MFFP)',
-                            style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF6A1B9A)),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Aire de confinement officielle du cerf de Virginie'
-                        '${ravage.props['TOPONYME'] != null ? ' — ${ravage.props['TOPONYME']}' : ''}. '
-                        'Certaines activités y sont légalement restreintes du 1er décembre au 1er mai. '
-                        'Vérifie la réglementation applicable avant de chasser dans ce secteur.',
-                      ),
-                    ],
-                  ),
-                ),
-              ],
             ],
           ),
         ),
@@ -283,18 +254,25 @@ class _MapPageState extends State<MapPage> {
                     onMapReady: _loadVisibleTiles,
                   ),
                   children: [
-                    TileLayer(
-                      key: ValueKey('$_baseLayer-$_satSource'),
-                      urlTemplate: _tileUrlTemplate(),
-                      userAgentPackageName: 'com.bastienbouchard.chevreuilscan',
-                      maxZoom: 22,
+                    Opacity(
+                      opacity: _baseOpacity,
+                      child: TileLayer(
+                        key: ValueKey('$_baseLayer-$_satSource'),
+                        urlTemplate: _tileUrlTemplate(),
+                        userAgentPackageName: 'com.bastienbouchard.chevreuilscan',
+                        maxZoom: 22,
+                      ),
                     ),
                     if (_ecoVisible)
                       Opacity(
                         opacity: _ecoOpacity,
                         child: PolygonLayer(polygons: _polygons),
                       ),
-                    PolygonLayer(polygons: _ravagePolygons),
+                    if (_terresPriveesVisible)
+                      Opacity(
+                        opacity: _terresPriveesOpacity,
+                        child: TileLayer(tileProvider: _terresPriveesTileProvider),
+                      ),
                     PolygonLayer(polygons: _champPolygons),
                     if (_drawingPoints.isNotEmpty) ...[
                       PolylineLayer(polylines: [
@@ -352,12 +330,20 @@ class _MapPageState extends State<MapPage> {
                       child: _LayerPanel(
                         baseLayer: _baseLayer,
                         satSource: _satSource,
+                        baseOpacity: _baseOpacity,
                         ecoVisible: _ecoVisible,
                         ecoOpacity: _ecoOpacity,
+                        terresPriveesVisible: _terresPriveesVisible,
+                        terresPriveesOpacity: _terresPriveesOpacity,
                         onBaseLayerChanged: (v) => setState(() => _baseLayer = v),
                         onSatSourceChanged: (v) => setState(() => _satSource = v),
+                        onBaseOpacityChanged: (v) => setState(() => _baseOpacity = v),
                         onEcoToggle: () => setState(() => _ecoVisible = !_ecoVisible),
                         onEcoOpacityChanged: (v) => setState(() => _ecoOpacity = v),
+                        onTerresPriveesToggle: () =>
+                            setState(() => _terresPriveesVisible = !_terresPriveesVisible),
+                        onTerresPriveesOpacityChanged: (v) =>
+                            setState(() => _terresPriveesOpacity = v),
                       ),
                     ),
                   ),
@@ -468,22 +454,34 @@ class _InfoBanner extends StatelessWidget {
 class _LayerPanel extends StatelessWidget {
   final String baseLayer;
   final String satSource;
+  final double baseOpacity;
   final bool ecoVisible;
   final double ecoOpacity;
+  final bool terresPriveesVisible;
+  final double terresPriveesOpacity;
   final ValueChanged<String> onBaseLayerChanged;
   final ValueChanged<String> onSatSourceChanged;
+  final ValueChanged<double> onBaseOpacityChanged;
   final VoidCallback onEcoToggle;
   final ValueChanged<double> onEcoOpacityChanged;
+  final VoidCallback onTerresPriveesToggle;
+  final ValueChanged<double> onTerresPriveesOpacityChanged;
 
   const _LayerPanel({
     required this.baseLayer,
     required this.satSource,
+    required this.baseOpacity,
     required this.ecoVisible,
     required this.ecoOpacity,
+    required this.terresPriveesVisible,
+    required this.terresPriveesOpacity,
     required this.onBaseLayerChanged,
     required this.onSatSourceChanged,
+    required this.onBaseOpacityChanged,
     required this.onEcoToggle,
     required this.onEcoOpacityChanged,
+    required this.onTerresPriveesToggle,
+    required this.onTerresPriveesOpacityChanged,
   });
 
   Widget _baseChoice(BuildContext context, String value, String label, IconData icon) {
@@ -520,58 +518,92 @@ class _LayerPanel extends StatelessWidget {
     );
   }
 
+  Widget _toggleSlider({
+    required IconData icon,
+    required String label,
+    required bool visible,
+    required double opacity,
+    required VoidCallback onToggle,
+    required ValueChanged<double> onOpacityChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: onToggle,
+          child: Row(
+            children: [
+              Icon(visible ? icon : Icons.visibility_off_outlined, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text(label)),
+              Text('${(opacity * 100).round()}%', style: const TextStyle(fontSize: 12)),
+            ],
+          ),
+        ),
+        if (visible)
+          Slider(value: opacity, min: 0.05, max: 1.0, onChanged: onOpacityChanged),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Material(
       elevation: 6,
       borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 220,
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Fond de carte', style: Theme.of(context).textTheme.labelLarge),
-            _baseChoice(context, 'osm', 'Carte', Icons.map_outlined),
-            _baseChoice(context, 'satellite', 'Satellite', Icons.satellite_alt_outlined),
-            if (baseLayer == 'satellite')
-              Padding(
-                padding: const EdgeInsets.only(left: 26, top: 4, bottom: 4),
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: [
-                    _satChip('esri', 'ESRI'),
-                    _satChip('sentinel', 'Sentinel'),
-                    _satChip('mern', 'MRNF QC'),
-                  ],
-                ),
-              ),
-            _baseChoice(context, 'topo', 'Topographique', Icons.terrain_outlined),
-            const Divider(height: 20),
-            InkWell(
-              onTap: onEcoToggle,
-              child: Row(
-                children: [
-                  Icon(
-                    ecoVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                    size: 18,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 480),
+        child: SingleChildScrollView(
+          child: Container(
+            width: 230,
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Fond de carte', style: Theme.of(context).textTheme.labelLarge),
+                _baseChoice(context, 'osm', 'Carte', Icons.map_outlined),
+                _baseChoice(context, 'satellite', 'Satellite', Icons.satellite_alt_outlined),
+                if (baseLayer == 'satellite')
+                  Padding(
+                    padding: const EdgeInsets.only(left: 26, top: 4, bottom: 4),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        _satChip('esri', 'ESRI'),
+                        _satChip('sentinel', 'Sentinel'),
+                        _satChip('mern', 'MRNF QC'),
+                      ],
+                    ),
                   ),
-                  const SizedBox(width: 8),
-                  const Expanded(child: Text('Carte d\'habitat')),
-                  Text('${(ecoOpacity * 100).round()}%', style: const TextStyle(fontSize: 12)),
-                ],
-              ),
+                _baseChoice(context, 'topo', 'Topographique', Icons.terrain_outlined),
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text('Transparence du fond', style: TextStyle(fontSize: 12)),
+                ),
+                Slider(value: baseOpacity, min: 0.1, max: 1.0, onChanged: onBaseOpacityChanged),
+                const Divider(height: 12),
+                _toggleSlider(
+                  icon: Icons.visibility_outlined,
+                  label: 'Carte d\'habitat',
+                  visible: ecoVisible,
+                  opacity: ecoOpacity,
+                  onToggle: onEcoToggle,
+                  onOpacityChanged: onEcoOpacityChanged,
+                ),
+                const Divider(height: 12),
+                _toggleSlider(
+                  icon: Icons.grid_on_outlined,
+                  label: 'Lots à bois (terres privées)',
+                  visible: terresPriveesVisible,
+                  opacity: terresPriveesOpacity,
+                  onToggle: onTerresPriveesToggle,
+                  onOpacityChanged: onTerresPriveesOpacityChanged,
+                ),
+              ],
             ),
-            if (ecoVisible)
-              Slider(
-                value: ecoOpacity,
-                min: 0.05,
-                max: 1.0,
-                onChanged: onEcoOpacityChanged,
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -627,23 +659,7 @@ class _Legend extends StatelessWidget {
                       ],
                     ),
                   ))
-              .toList()
-            ..add(Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Row(
-                children: [
-                  Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: const Color(0xFF6A1B9A), width: 2),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  const Text('Ravage légal (MFFP)', style: TextStyle(fontSize: 12)),
-                ],
-              ),
-            )),
+              .toList(),
         ),
       ),
     );
