@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -13,8 +15,15 @@ import '../services/champ_storage_service.dart';
 import '../services/deer_habitat_service.dart';
 import '../services/deer_polygon_service.dart';
 import '../services/eco_feature_parser.dart';
+import '../services/eco_tile_service.dart';
 import '../services/field_score_service.dart';
 import '../widgets/champ_form_sheet.dart';
+
+// Au-delà de ce nombre de tuiles (0.5° x 0.5° chacune) visibles à l'écran,
+// on demande à l'utilisateur de zoomer plutôt que de tout télécharger.
+const _maxVisibleTiles = 6;
+const _initialCenter = LatLng(48.2917, -71.322);
+const _initialZoom = 12.0;
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -25,6 +34,7 @@ class MapPage extends StatefulWidget {
 
 class _MapPageState extends State<MapPage> {
   final MapController _mapController = MapController();
+  final EcoTileService _tileService = EcoTileService();
 
   Season _season = Season.preRut;
   List<EcoFeature> _features = [];
@@ -34,10 +44,12 @@ class _MapPageState extends State<MapPage> {
   List<Polygon> _ravagePolygons = [];
   List<Polygon> _champPolygons = [];
   bool _loading = true;
-  LatLngBounds? _bounds;
+  bool _loadingTiles = false;
+  bool _tooZoomedOut = false;
 
   bool _drawingField = false;
   List<LatLng> _drawingPoints = [];
+  Timer? _moveSettleTimer;
 
   @override
   void initState() {
@@ -45,22 +57,49 @@ class _MapPageState extends State<MapPage> {
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _moveSettleTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
-    final ecoJson = await rootBundle.loadString('assets/sample_eco.geojson');
     final ravageJson = await rootBundle.loadString('assets/ravages_cerf.geojson');
-    final features = await compute(parseEcoFeaturesIsolate, ecoJson);
     final ravages = await compute(parseEcoFeaturesIsolate, ravageJson);
     final champs = await loadChamps();
     setState(() {
-      _features = features;
       _ravages = ravages;
       _champs = champs;
-      _bounds = boundsFromFeatures(features);
-      _polygons = buildDeerPolygons(features, _season);
       _ravagePolygons = buildRavagePolygons(ravages);
       _champPolygons = buildChampPolygons(champs, _season, DateTime.now());
       _loading = false;
     });
+  }
+
+  Future<void> _loadVisibleTiles() async {
+    final bounds = _mapController.camera.visibleBounds;
+    final tileCount = tilesForBounds(bounds).length;
+    if (tileCount > _maxVisibleTiles) {
+      setState(() => _tooZoomedOut = true);
+      return;
+    }
+    setState(() {
+      _tooZoomedOut = false;
+      _loadingTiles = true;
+    });
+    final features = await _tileService.loadForBounds(bounds);
+    if (!mounted) return;
+    setState(() {
+      _features = features;
+      _polygons = buildDeerPolygons(features, _season);
+      _loadingTiles = false;
+    });
+  }
+
+  void _onMapPositionChanged(MapCamera camera, bool hasGesture) {
+    if (!hasGesture) return;
+    _moveSettleTimer?.cancel();
+    _moveSettleTimer = Timer(const Duration(milliseconds: 500), _loadVisibleTiles);
   }
 
   void _changeSeason(Season season) {
@@ -207,10 +246,11 @@ class _MapPageState extends State<MapPage> {
                 FlutterMap(
                   mapController: _mapController,
                   options: MapOptions(
-                    initialCameraFit: _bounds != null
-                        ? CameraFit.bounds(bounds: _bounds!, padding: const EdgeInsets.all(24))
-                        : null,
+                    initialCenter: _initialCenter,
+                    initialZoom: _initialZoom,
                     onTap: _onMapTap,
+                    onPositionChanged: _onMapPositionChanged,
+                    onMapReady: _loadVisibleTiles,
                   ),
                   children: [
                     TileLayer(
@@ -235,7 +275,20 @@ class _MapPageState extends State<MapPage> {
                   top: 12,
                   left: 12,
                   right: 12,
-                  child: SafeArea(child: _SeasonSelector(season: _season, onChanged: _changeSeason)),
+                  child: SafeArea(
+                    child: Column(
+                      children: [
+                        _SeasonSelector(season: _season, onChanged: _changeSeason),
+                        if (_tooZoomedOut) ...[
+                          const SizedBox(height: 8),
+                          const _InfoBanner(text: 'Zoome pour voir la carte d\'habitat'),
+                        ] else if (_loadingTiles) ...[
+                          const SizedBox(height: 8),
+                          const _InfoBanner(text: 'Chargement de l\'habitat…', showSpinner: true),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
                 const Positioned(
                   bottom: 16,
@@ -293,6 +346,38 @@ class _DrawingToolbar extends StatelessWidget {
             ),
             TextButton(onPressed: onCancel, child: const Text('Annuler')),
             FilledButton(onPressed: onFinish, child: const Text('Terminer')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoBanner extends StatelessWidget {
+  final String text;
+  final bool showSpinner;
+
+  const _InfoBanner({required this.text, this.showSpinner = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showSpinner) ...[
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Text(text, style: const TextStyle(fontSize: 13)),
           ],
         ),
       ),

@@ -37,6 +37,7 @@ dependencies:
   flutter_map: ^8.0.0
   latlong2: ^0.9.1
   shared_preferences: ^2.3.0
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:
@@ -61,7 +62,6 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/sample_eco.geojson
     - assets/ravages_cerf.geojson
 
   # To add assets to your application, add an assets section, like this:
