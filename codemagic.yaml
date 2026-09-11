@@ -45,7 +45,6 @@ workflows:
           app-store-connect fetch-signing-files \
             com.bastienbouchard.chevreuilscan \
             --type IOS_APP_STORE \
-            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
             --create
       - name: Add certificates to keychain
         script: keychain add-certificates
