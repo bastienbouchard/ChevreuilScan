@@ -7,6 +7,7 @@ Réutilise le schéma d'attributs écoforestiers du MFFP déjà utilisé par Eco
 Prix unique : 9,99 $ (pas d'abonnement).
 
 Dépôt : `bastienbouchard/ChevreuilScan`. Bundle ID : `com.bastienbouchard.chevreuilscan`.
+Nom d'affichage de l'app : **Chevreuil SCAN** (avec espace, même convention que « Orignal Scan »).
 
 ## Build & déploiement
 - **Branche de travail : `main`** — build toujours depuis main dans Codemagic.
