@@ -51,6 +51,36 @@ class _MapPageState extends State<MapPage> {
   List<LatLng> _drawingPoints = [];
   Timer? _moveSettleTimer;
 
+  // Couche de fond et sources satellite/topo — même principe qu'EcoMap.
+  String _baseLayer = 'osm'; // 'osm' | 'satellite' | 'topo'
+  String _satSource = 'esri'; // 'esri' | 'sentinel' | 'mern'
+  bool _ecoVisible = true;
+  double _ecoOpacity = 0.55;
+  bool _showLayerPanel = false;
+
+  String _tileUrlTemplate() {
+    switch (_baseLayer) {
+      case 'satellite':
+        switch (_satSource) {
+          case 'sentinel':
+            return 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg';
+          case 'mern':
+            return 'https://servicesmatriciels.mern.gouv.qc.ca/erdas-iws/ogc/wmts/Imagerie_Continue'
+                '?layer=Imagerie_GQ&style=default&tilematrixset=GoogleMapsCompatibleExt2:epsg:3857'
+                '&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/jpeg'
+                '&TileMatrix={z}&TileCol={x}&TileRow={y}';
+          case 'esri':
+          default:
+            return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+        }
+      case 'topo':
+        return 'https://tile.opentopomap.org/{z}/{x}/{y}.png';
+      case 'osm':
+      default:
+        return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -254,10 +284,16 @@ class _MapPageState extends State<MapPage> {
                   ),
                   children: [
                     TileLayer(
-                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.chevreuilscan.chevreuilscan',
+                      key: ValueKey('$_baseLayer-$_satSource'),
+                      urlTemplate: _tileUrlTemplate(),
+                      userAgentPackageName: 'com.bastienbouchard.chevreuilscan',
+                      maxZoom: 22,
                     ),
-                    PolygonLayer(polygons: _polygons),
+                    if (_ecoVisible)
+                      Opacity(
+                        opacity: _ecoOpacity,
+                        child: PolygonLayer(polygons: _polygons),
+                      ),
                     PolygonLayer(polygons: _ravagePolygons),
                     PolygonLayer(polygons: _champPolygons),
                     if (_drawingPoints.isNotEmpty) ...[
@@ -295,6 +331,36 @@ class _MapPageState extends State<MapPage> {
                   left: 12,
                   child: _Legend(),
                 ),
+                Positioned(
+                  bottom: 16,
+                  left: 0,
+                  right: 0,
+                  child: IgnorePointer(
+                    child: Center(
+                      child: Opacity(
+                        opacity: 0.42,
+                        child: Image.asset('assets/logo.png', width: 90),
+                      ),
+                    ),
+                  ),
+                ),
+                if (_showLayerPanel)
+                  Positioned(
+                    top: 70,
+                    right: 12,
+                    child: SafeArea(
+                      child: _LayerPanel(
+                        baseLayer: _baseLayer,
+                        satSource: _satSource,
+                        ecoVisible: _ecoVisible,
+                        ecoOpacity: _ecoOpacity,
+                        onBaseLayerChanged: (v) => setState(() => _baseLayer = v),
+                        onSatSourceChanged: (v) => setState(() => _satSource = v),
+                        onEcoToggle: () => setState(() => _ecoVisible = !_ecoVisible),
+                        onEcoOpacityChanged: (v) => setState(() => _ecoOpacity = v),
+                      ),
+                    ),
+                  ),
                 if (_drawingField)
                   Positioned(
                     bottom: 16,
@@ -312,10 +378,24 @@ class _MapPageState extends State<MapPage> {
             ),
       floatingActionButton: _loading || _drawingField
           ? null
-          : FloatingActionButton(
-              onPressed: _toggleDrawing,
-              tooltip: 'Dessiner un champ',
-              child: const Icon(Icons.agriculture),
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FloatingActionButton(
+                  heroTag: 'layers',
+                  onPressed: () => setState(() => _showLayerPanel = !_showLayerPanel),
+                  tooltip: 'Couches de carte',
+                  backgroundColor: _showLayerPanel ? Theme.of(context).colorScheme.primaryContainer : null,
+                  child: const Icon(Icons.layers_outlined),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'draw',
+                  onPressed: _toggleDrawing,
+                  tooltip: 'Dessiner un champ',
+                  child: const Icon(Icons.agriculture),
+                ),
+              ],
             ),
     );
   }
@@ -378,6 +458,119 @@ class _InfoBanner extends StatelessWidget {
               const SizedBox(width: 8),
             ],
             Text(text, style: const TextStyle(fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LayerPanel extends StatelessWidget {
+  final String baseLayer;
+  final String satSource;
+  final bool ecoVisible;
+  final double ecoOpacity;
+  final ValueChanged<String> onBaseLayerChanged;
+  final ValueChanged<String> onSatSourceChanged;
+  final VoidCallback onEcoToggle;
+  final ValueChanged<double> onEcoOpacityChanged;
+
+  const _LayerPanel({
+    required this.baseLayer,
+    required this.satSource,
+    required this.ecoVisible,
+    required this.ecoOpacity,
+    required this.onBaseLayerChanged,
+    required this.onSatSourceChanged,
+    required this.onEcoToggle,
+    required this.onEcoOpacityChanged,
+  });
+
+  Widget _baseChoice(BuildContext context, String value, String label, IconData icon) {
+    final selected = baseLayer == value;
+    return InkWell(
+      onTap: () => onBaseLayerChanged(value),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: selected ? Theme.of(context).colorScheme.primary : null),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                color: selected ? Theme.of(context).colorScheme.primary : null,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _satChip(String value, String label) {
+    final selected = satSource == value;
+    return ChoiceChip(
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      selected: selected,
+      onSelected: (_) => onSatSourceChanged(value),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 220,
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Fond de carte', style: Theme.of(context).textTheme.labelLarge),
+            _baseChoice(context, 'osm', 'Carte', Icons.map_outlined),
+            _baseChoice(context, 'satellite', 'Satellite', Icons.satellite_alt_outlined),
+            if (baseLayer == 'satellite')
+              Padding(
+                padding: const EdgeInsets.only(left: 26, top: 4, bottom: 4),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    _satChip('esri', 'ESRI'),
+                    _satChip('sentinel', 'Sentinel'),
+                    _satChip('mern', 'MRNF QC'),
+                  ],
+                ),
+              ),
+            _baseChoice(context, 'topo', 'Topographique', Icons.terrain_outlined),
+            const Divider(height: 20),
+            InkWell(
+              onTap: onEcoToggle,
+              child: Row(
+                children: [
+                  Icon(
+                    ecoVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(child: Text('Carte d\'habitat')),
+                  Text('${(ecoOpacity * 100).round()}%', style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+            if (ecoVisible)
+              Slider(
+                value: ecoOpacity,
+                min: 0.05,
+                max: 1.0,
+                onChanged: onEcoOpacityChanged,
+              ),
           ],
         ),
       ),
