@@ -29,4 +29,26 @@ class Champ {
     required this.hauteurCm,
     required this.hasBordures,
   });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'polygon': polygon.map((p) => [p.latitude, p.longitude]).toList(),
+        'crop': crop.name,
+        'harvestDate': harvestDate.toIso8601String(),
+        'hauteurCm': hauteurCm,
+        'hasBordures': hasBordures,
+      };
+
+  factory Champ.fromJson(Map<String, dynamic> json) {
+    return Champ(
+      id: json['id'] as String,
+      polygon: (json['polygon'] as List)
+          .map((p) => LatLng((p[0] as num).toDouble(), (p[1] as num).toDouble()))
+          .toList(),
+      crop: CropType.values.firstWhere((c) => c.name == json['crop']),
+      harvestDate: DateTime.parse(json['harvestDate'] as String),
+      hauteurCm: (json['hauteurCm'] as num).toDouble(),
+      hasBordures: json['hasBordures'] as bool,
+    );
+  }
 }

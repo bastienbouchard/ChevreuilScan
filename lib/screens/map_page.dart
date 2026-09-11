@@ -4,12 +4,17 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/champ.dart';
 import '../models/habitat_score.dart';
 import '../models/score_level.dart';
 import '../models/season.dart';
+import '../services/champ_polygon_service.dart';
+import '../services/champ_storage_service.dart';
 import '../services/deer_habitat_service.dart';
 import '../services/deer_polygon_service.dart';
 import '../services/eco_feature_parser.dart';
+import '../services/field_score_service.dart';
+import '../widgets/champ_form_sheet.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -24,10 +29,15 @@ class _MapPageState extends State<MapPage> {
   Season _season = Season.preRut;
   List<EcoFeature> _features = [];
   List<EcoFeature> _ravages = [];
+  List<Champ> _champs = [];
   List<Polygon> _polygons = [];
   List<Polygon> _ravagePolygons = [];
+  List<Polygon> _champPolygons = [];
   bool _loading = true;
   LatLngBounds? _bounds;
+
+  bool _drawingField = false;
+  List<LatLng> _drawingPoints = [];
 
   @override
   void initState() {
@@ -40,12 +50,15 @@ class _MapPageState extends State<MapPage> {
     final ravageJson = await rootBundle.loadString('assets/ravages_cerf.geojson');
     final features = await compute(parseEcoFeaturesIsolate, ecoJson);
     final ravages = await compute(parseEcoFeaturesIsolate, ravageJson);
+    final champs = await loadChamps();
     setState(() {
       _features = features;
       _ravages = ravages;
+      _champs = champs;
       _bounds = boundsFromFeatures(features);
       _polygons = buildDeerPolygons(features, _season);
       _ravagePolygons = buildRavagePolygons(ravages);
+      _champPolygons = buildChampPolygons(champs, _season, DateTime.now());
       _loading = false;
     });
   }
@@ -54,10 +67,46 @@ class _MapPageState extends State<MapPage> {
     setState(() {
       _season = season;
       _polygons = buildDeerPolygons(_features, _season);
+      _champPolygons = buildChampPolygons(_champs, _season, DateTime.now());
     });
   }
 
+  void _toggleDrawing() {
+    setState(() {
+      _drawingField = !_drawingField;
+      _drawingPoints = [];
+    });
+  }
+
+  Future<void> _finishDrawing() async {
+    if (_drawingPoints.length < 3) return;
+    final points = List<LatLng>.from(_drawingPoints);
+    setState(() {
+      _drawingField = false;
+      _drawingPoints = [];
+    });
+    final champ = await showChampFormSheet(context, points);
+    if (champ == null) return;
+    setState(() {
+      _champs = [..._champs, champ];
+      _champPolygons = buildChampPolygons(_champs, _season, DateTime.now());
+    });
+    await saveChamps(_champs);
+  }
+
   void _onMapTap(TapPosition tapPosition, LatLng point) {
+    if (_drawingField) {
+      setState(() => _drawingPoints = [..._drawingPoints, point]);
+      return;
+    }
+
+    final champ = findChampAtPoint(_champs, point);
+    if (champ != null) {
+      final score = scoreField(champ, _season, DateTime.now());
+      _showExplanationSheet(score, null, subtitle: champ.crop.label);
+      return;
+    }
+
     final feature = findFeatureAtPoint(_features, point);
     if (feature == null) return;
     final score = scoreDeerHabitat(feature.props, _season);
@@ -65,7 +114,7 @@ class _MapPageState extends State<MapPage> {
     _showExplanationSheet(score, ravage);
   }
 
-  void _showExplanationSheet(HabitatScore score, EcoFeature? ravage) {
+  void _showExplanationSheet(HabitatScore score, EcoFeature? ravage, {String? subtitle}) {
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
@@ -87,7 +136,7 @@ class _MapPageState extends State<MapPage> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    score.level.label,
+                    subtitle != null ? '${score.level.label} — $subtitle' : score.level.label,
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ],
@@ -170,6 +219,16 @@ class _MapPageState extends State<MapPage> {
                     ),
                     PolygonLayer(polygons: _polygons),
                     PolygonLayer(polygons: _ravagePolygons),
+                    PolygonLayer(polygons: _champPolygons),
+                    if (_drawingPoints.isNotEmpty) ...[
+                      PolylineLayer(polylines: [
+                        Polyline(points: _drawingPoints, color: const Color(0xFF5D4037), strokeWidth: 3),
+                      ]),
+                      CircleLayer(circles: [
+                        for (final p in _drawingPoints)
+                          CircleMarker(point: p, radius: 5, color: const Color(0xFF5D4037)),
+                      ]),
+                    ],
                   ],
                 ),
                 Positioned(
@@ -183,8 +242,60 @@ class _MapPageState extends State<MapPage> {
                   left: 12,
                   child: _Legend(),
                 ),
+                if (_drawingField)
+                  Positioned(
+                    bottom: 16,
+                    left: 12,
+                    right: 12,
+                    child: SafeArea(
+                      child: _DrawingToolbar(
+                        pointCount: _drawingPoints.length,
+                        onCancel: _toggleDrawing,
+                        onFinish: _drawingPoints.length >= 3 ? _finishDrawing : null,
+                      ),
+                    ),
+                  ),
               ],
             ),
+      floatingActionButton: _loading || _drawingField
+          ? null
+          : FloatingActionButton(
+              onPressed: _toggleDrawing,
+              tooltip: 'Dessiner un champ',
+              child: const Icon(Icons.agriculture),
+            ),
+    );
+  }
+}
+
+class _DrawingToolbar extends StatelessWidget {
+  final int pointCount;
+  final VoidCallback onCancel;
+  final VoidCallback? onFinish;
+
+  const _DrawingToolbar({required this.pointCount, required this.onCancel, required this.onFinish});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                pointCount < 3
+                    ? 'Touche la carte pour ajouter des points ($pointCount/3 min.)'
+                    : '$pointCount points — prêt à terminer',
+              ),
+            ),
+            TextButton(onPressed: onCancel, child: const Text('Annuler')),
+            FilledButton(onPressed: onFinish, child: const Text('Terminer')),
+          ],
+        ),
+      ),
     );
   }
 }
