@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/champ.dart';
 import '../models/habitat_score.dart';
+import '../models/observation.dart';
 import '../models/score_level.dart';
 import '../models/season.dart';
 import '../providers/arcgis_export_tile_provider.dart';
@@ -14,8 +15,10 @@ import '../services/champ_storage_service.dart';
 import '../services/deer_habitat_service.dart';
 import '../services/deer_polygon_service.dart';
 import '../services/eco_feature_parser.dart';
+import '../services/eco_label_service.dart';
 import '../services/eco_tile_service.dart';
 import '../services/field_score_service.dart';
+import '../services/observation_storage_service.dart';
 import '../widgets/champ_form_sheet.dart';
 
 // Au-delà de ce nombre de tuiles (0.5° x 0.5° chacune) visibles à l'écran,
@@ -38,11 +41,15 @@ class _MapPageState extends State<MapPage> {
   Season _season = Season.preRut;
   List<EcoFeature> _features = [];
   List<Champ> _champs = [];
+  List<Observation> _observations = [];
   List<Polygon> _polygons = [];
   List<Polygon> _champPolygons = [];
+  List<EcoLabel> _labels = [];
   bool _loading = true;
   bool _loadingTiles = false;
   bool _tooZoomedOut = false;
+  bool _labelsVisible = false;
+  double _currentZoom = _initialZoom;
 
   bool _drawingField = false;
   List<LatLng> _drawingPoints = [];
@@ -99,11 +106,99 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _loadData() async {
     final champs = await loadChamps();
+    final observations = await loadObservations();
     setState(() {
       _champs = champs;
       _champPolygons = buildChampPolygons(champs, _season, DateTime.now());
+      _observations = observations;
       _loading = false;
     });
+  }
+
+  Future<void> _addObservation(ObservationType type) async {
+    final observation = Observation(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      position: _mapController.camera.center,
+      type: type,
+      timestamp: DateTime.now(),
+    );
+    setState(() => _observations = [..._observations, observation]);
+    await saveObservations(_observations);
+  }
+
+  Future<void> _deleteObservation(Observation observation) async {
+    setState(() => _observations = _observations.where((o) => o.id != observation.id).toList());
+    await saveObservations(_observations);
+  }
+
+  void _showAddObservationSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Nouvelle observation', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            for (final type in ObservationType.values)
+              ListTile(
+                leading: Text(type.emoji, style: const TextStyle(fontSize: 22)),
+                title: Text(type.label),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _addObservation(type);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showObservationDetail(Observation observation) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(observation.type.emoji, style: const TextStyle(fontSize: 28)),
+                  const SizedBox(width: 10),
+                  Text(observation.type.label, style: Theme.of(context).textTheme.titleLarge),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '${observation.timestamp.day.toString().padLeft(2, '0')}/'
+                '${observation.timestamp.month.toString().padLeft(2, '0')}/'
+                '${observation.timestamp.year} à '
+                '${observation.timestamp.hour.toString().padLeft(2, '0')}:'
+                '${observation.timestamp.minute.toString().padLeft(2, '0')}',
+              ),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    _deleteObservation(observation);
+                  },
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Supprimer'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadVisibleTiles() async {
@@ -122,11 +217,15 @@ class _MapPageState extends State<MapPage> {
     setState(() {
       _features = features;
       _polygons = buildDeerPolygons(features, _season);
+      _labels = buildEcoLabels(features);
       _loadingTiles = false;
     });
   }
 
   void _onMapPositionChanged(MapCamera camera, bool hasGesture) {
+    if (_currentZoom != camera.zoom) {
+      setState(() => _currentZoom = camera.zoom);
+    }
     if (!hasGesture) return;
     _moveSettleTimer?.cancel();
     _moveSettleTimer = Timer(const Duration(milliseconds: 500), _loadVisibleTiles);
@@ -274,6 +373,57 @@ class _MapPageState extends State<MapPage> {
                         child: TileLayer(tileProvider: _terresPriveesTileProvider),
                       ),
                     PolygonLayer(polygons: _champPolygons),
+                    if (_labelsVisible)
+                      MarkerLayer(
+                        markers: [
+                          for (final label in _labels)
+                            if (_currentZoom >= label.minZoom)
+                              Marker(
+                                point: label.position,
+                                width: 60,
+                                height: 18,
+                                child: IgnorePointer(
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.75),
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      label.label,
+                                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                        ],
+                      ),
+                    MarkerLayer(
+                      markers: [
+                        for (final observation in _observations)
+                          Marker(
+                            point: observation.position,
+                            width: 36,
+                            height: 36,
+                            child: GestureDetector(
+                              onTap: () => _showObservationDetail(observation),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: const Color(0xFFFF6B35), width: 2),
+                                  boxShadow: const [
+                                    BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
+                                  ],
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(observation.type.emoji, style: const TextStyle(fontSize: 18)),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                     if (_drawingPoints.isNotEmpty) ...[
                       PolylineLayer(polylines: [
                         Polyline(points: _drawingPoints, color: const Color(0xFF5D4037), strokeWidth: 3),
@@ -304,6 +454,12 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
                 ),
+                if (!_drawingField)
+                  const IgnorePointer(
+                    child: Center(
+                      child: Icon(Icons.add, size: 20, color: Colors.black45),
+                    ),
+                  ),
                 const Positioned(
                   bottom: 16,
                   left: 12,
@@ -335,6 +491,7 @@ class _MapPageState extends State<MapPage> {
                         ecoOpacity: _ecoOpacity,
                         terresPriveesVisible: _terresPriveesVisible,
                         terresPriveesOpacity: _terresPriveesOpacity,
+                        labelsVisible: _labelsVisible,
                         onBaseLayerChanged: (v) => setState(() => _baseLayer = v),
                         onSatSourceChanged: (v) => setState(() => _satSource = v),
                         onBaseOpacityChanged: (v) => setState(() => _baseOpacity = v),
@@ -344,6 +501,7 @@ class _MapPageState extends State<MapPage> {
                             setState(() => _terresPriveesVisible = !_terresPriveesVisible),
                         onTerresPriveesOpacityChanged: (v) =>
                             setState(() => _terresPriveesOpacity = v),
+                        onLabelsToggle: () => setState(() => _labelsVisible = !_labelsVisible),
                       ),
                     ),
                   ),
@@ -376,10 +534,17 @@ class _MapPageState extends State<MapPage> {
                 ),
                 const SizedBox(height: 12),
                 FloatingActionButton(
+                  heroTag: 'observation',
+                  onPressed: _showAddObservationSheet,
+                  tooltip: 'Ajouter une observation',
+                  child: const Icon(Icons.add_location_alt_outlined),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
                   heroTag: 'draw',
                   onPressed: _toggleDrawing,
                   tooltip: 'Dessiner un champ',
-                  child: const Icon(Icons.agriculture),
+                  child: const Icon(Icons.grass),
                 ),
               ],
             ),
@@ -459,6 +624,7 @@ class _LayerPanel extends StatelessWidget {
   final double ecoOpacity;
   final bool terresPriveesVisible;
   final double terresPriveesOpacity;
+  final bool labelsVisible;
   final ValueChanged<String> onBaseLayerChanged;
   final ValueChanged<String> onSatSourceChanged;
   final ValueChanged<double> onBaseOpacityChanged;
@@ -466,6 +632,7 @@ class _LayerPanel extends StatelessWidget {
   final ValueChanged<double> onEcoOpacityChanged;
   final VoidCallback onTerresPriveesToggle;
   final ValueChanged<double> onTerresPriveesOpacityChanged;
+  final VoidCallback onLabelsToggle;
 
   const _LayerPanel({
     required this.baseLayer,
@@ -475,6 +642,7 @@ class _LayerPanel extends StatelessWidget {
     required this.ecoOpacity,
     required this.terresPriveesVisible,
     required this.terresPriveesOpacity,
+    required this.labelsVisible,
     required this.onBaseLayerChanged,
     required this.onSatSourceChanged,
     required this.onBaseOpacityChanged,
@@ -482,6 +650,7 @@ class _LayerPanel extends StatelessWidget {
     required this.onEcoOpacityChanged,
     required this.onTerresPriveesToggle,
     required this.onTerresPriveesOpacityChanged,
+    required this.onLabelsToggle,
   });
 
   Widget _baseChoice(BuildContext context, String value, String label, IconData icon) {
@@ -600,6 +769,21 @@ class _LayerPanel extends StatelessWidget {
                   opacity: terresPriveesOpacity,
                   onToggle: onTerresPriveesToggle,
                   onOpacityChanged: onTerresPriveesOpacityChanged,
+                ),
+                const Divider(height: 12),
+                InkWell(
+                  onTap: onLabelsToggle,
+                  child: Row(
+                    children: [
+                      Icon(
+                        labelsVisible ? Icons.label_outlined : Icons.label_off_outlined,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(child: Text('Codes forestiers')),
+                      Switch(value: labelsVisible, onChanged: (_) => onLabelsToggle()),
+                    ],
+                  ),
                 ),
               ],
             ),
