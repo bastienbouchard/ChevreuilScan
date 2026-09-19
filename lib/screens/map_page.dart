@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/champ.dart';
@@ -20,6 +22,7 @@ import '../services/eco_tile_service.dart';
 import '../services/field_score_service.dart';
 import '../services/observation_storage_service.dart';
 import '../widgets/champ_form_sheet.dart';
+import '../widgets/position_marker.dart';
 
 // Au-delà de ce nombre de tuiles (0.5° x 0.5° chacune) visibles à l'écran,
 // on demande à l'utilisateur de zoomer plutôt que de tout télécharger.
@@ -65,6 +68,13 @@ class _MapPageState extends State<MapPage> {
   double _terresPriveesOpacity = 0.7;
   bool _showLayerPanel = false;
 
+  // Position GPS + boussole.
+  LatLng? _currentPosition;
+  bool _headingUp = false;
+  double _compassHeading = 0;
+  StreamSubscription<Position>? _positionStream;
+  StreamSubscription<CompassEvent>? _compassSub;
+
   final _terresPriveesTileProvider = ArcGISExportTileProvider(
     mapServerUrl: 'https://geo.environnement.gouv.qc.ca/donnees/rest/services/Reference/Cadastre_allege/MapServer',
   );
@@ -96,11 +106,52 @@ class _MapPageState extends State<MapPage> {
   void initState() {
     super.initState();
     _loadData();
+    _initLocation();
+    _compassSub = FlutterCompass.events?.listen((event) {
+      final h = event.heading;
+      if (h == null || !mounted) return;
+      if (_headingUp) _mapController.rotate(-h);
+      setState(() => _compassHeading = h);
+    });
+  }
+
+  Future<void> _initLocation() async {
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return;
+    }
+    if (!await Geolocator.isLocationServiceEnabled()) return;
+
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5),
+    ).listen((position) {
+      if (!mounted) return;
+      setState(() => _currentPosition = LatLng(position.latitude, position.longitude));
+    });
+  }
+
+  void _resetNorth() {
+    setState(() => _headingUp = false);
+    _mapController.rotate(0);
+  }
+
+  void _toggleHeadingUp() {
+    if (_headingUp) {
+      _resetNorth();
+    } else {
+      setState(() => _headingUp = true);
+    }
   }
 
   @override
   void dispose() {
     _moveSettleTimer?.cancel();
+    _positionStream?.cancel();
+    _compassSub?.cancel();
     super.dispose();
   }
 
@@ -424,6 +475,32 @@ class _MapPageState extends State<MapPage> {
                           ),
                       ],
                     ),
+                    if (_currentPosition != null)
+                      MarkerLayer(
+                        markers: [
+                          if (_headingUp)
+                            Marker(
+                              point: _currentPosition!,
+                              width: 120,
+                              height: 120,
+                              rotate: true,
+                              child: const CustomPaint(painter: HeadingHaloPainter()),
+                            ),
+                          Marker(
+                            point: _currentPosition!,
+                            width: 32,
+                            height: 32,
+                            rotate: true,
+                            child: Transform.rotate(
+                              angle: _headingUp ? 0.0 : _compassHeading * pi / 180,
+                              child: const CustomPaint(
+                                size: Size(32, 32),
+                                painter: PositionArrowPainter(),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     if (_drawingPoints.isNotEmpty) ...[
                       PolylineLayer(polylines: [
                         Polyline(points: _drawingPoints, color: const Color(0xFF5D4037), strokeWidth: 3),
@@ -452,6 +529,15 @@ class _MapPageState extends State<MapPage> {
                         ],
                       ],
                     ),
+                  ),
+                ),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 60,
+                  right: 12,
+                  child: _NorthButton(
+                    headingUp: _headingUp,
+                    compassHeading: _compassHeading,
+                    onTap: _toggleHeadingUp,
                   ),
                 ),
                 if (!_drawingField)
@@ -787,6 +873,62 @@ class _LayerPanel extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NorthButton extends StatelessWidget {
+  final bool headingUp;
+  final double compassHeading;
+  final VoidCallback onTap;
+
+  const _NorthButton({
+    required this.headingUp,
+    required this.compassHeading,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final angle = headingUp ? -compassHeading * pi / 180 : 0.0;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: headingUp ? const Color(0xFFFF6B35) : const Color(0xFF1A1A1A).withValues(alpha: 0.88),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: headingUp ? const Color(0xFFFF6B35) : Colors.white24,
+          ),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
+          ],
+        ),
+        child: Transform.rotate(
+          angle: angle,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.navigation,
+                color: headingUp ? Colors.black : const Color(0xFFFF6B35),
+                size: 14,
+              ),
+              Text(
+                'N',
+                style: TextStyle(
+                  color: headingUp ? Colors.black : const Color(0xFFFF6B35),
+                  fontSize: 8,
+                  fontWeight: FontWeight.bold,
+                  height: 1.0,
+                ),
+              ),
+            ],
           ),
         ),
       ),
