@@ -22,6 +22,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.27.4'
           channel: stable
 
       - name: Auto-increment build number
