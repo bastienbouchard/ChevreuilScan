@@ -22,6 +22,7 @@ import '../services/eco_label_service.dart';
 import '../services/eco_tile_service.dart';
 import '../services/field_score_service.dart';
 import '../services/observation_storage_service.dart';
+import '../services/stand_finder_service.dart';
 import '../services/track_storage_service.dart';
 import '../services/wind_service.dart';
 import '../widgets/champ_form_sheet.dart';
@@ -88,6 +89,8 @@ class _MapPageState extends State<MapPage> {
   WindInfo? _wind;
   bool _windFetchedWithGps = false;
   bool _hasCenteredOnGps = false;
+
+  StandRecommendation? _standRecommendation;
 
   final _terresPriveesTileProvider = ArcGISExportTileProvider(
     mapServerUrl: 'https://geo.environnement.gouv.qc.ca/donnees/rest/services/Reference/Cadastre_allege/MapServer',
@@ -228,6 +231,64 @@ class _MapPageState extends State<MapPage> {
               _deleteTrack(t);
               setSheetState(() {});
             },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _findBestStand() {
+    if (_wind == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Données de vent non disponibles pour l\'instant.')),
+      );
+      return;
+    }
+    if (_features.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Zoome sur un secteur pour charger l\'habitat avant de chercher un poste.'),
+        ),
+      );
+      return;
+    }
+    final rec = findBestStand(features: _features, season: _season, windFromDeg: _wind!.deg);
+    if (rec == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Aucune zone intéressante trouvée dans le secteur visible.')),
+      );
+      return;
+    }
+    setState(() => _standRecommendation = rec);
+    _mapController.move(rec.position, _mapController.camera.zoom);
+    _showStandSheet(rec);
+  }
+
+  void _showStandSheet(StandRecommendation rec) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.gps_fixed, color: Color(0xFFFF6B35)),
+                  const SizedBox(width: 8),
+                  Text('Poste recommandé', style: Theme.of(context).textTheme.titleLarge),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(rec.reason),
+              const SizedBox(height: 8),
+              Text(
+                'Saison : ${_season.label} · Vent : ${windCardinal(_wind!.deg)} ${_wind!.speed.round()} km/h',
+                style: const TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            ],
           ),
         ),
       ),
@@ -589,6 +650,10 @@ class _MapPageState extends State<MapPage> {
     return Scaffold(
       key: _scaffoldKey,
       drawer: _AppDrawer(
+        onFindStand: () {
+          Navigator.of(context).pop();
+          _findBestStand();
+        },
         onTracks: () {
           Navigator.of(context).pop();
           _openTracksPage();
@@ -726,6 +791,24 @@ class _MapPageState extends State<MapPage> {
                       PolylineLayer(polylines: [
                         Polyline(points: _trackPoints, color: const Color(0xFF4A90E2), strokeWidth: 4),
                       ]),
+                    if (_standRecommendation != null) ...[
+                      PolylineLayer(polylines: [
+                        Polyline(
+                          points: [_standRecommendation!.position, _standRecommendation!.targetZone],
+                          color: const Color(0xFFFF6B35),
+                          strokeWidth: 2,
+                          pattern: const StrokePattern.dotted(),
+                        ),
+                      ]),
+                      MarkerLayer(markers: [
+                        Marker(
+                          point: _standRecommendation!.position,
+                          width: 40,
+                          height: 40,
+                          child: const Icon(Icons.gps_fixed, color: Color(0xFFFF6B35), size: 32),
+                        ),
+                      ]),
+                    ],
                   ],
                 ),
                 Positioned(
@@ -931,11 +1014,17 @@ class _HamburgerButton extends StatelessWidget {
 }
 
 class _AppDrawer extends StatelessWidget {
+  final VoidCallback onFindStand;
   final VoidCallback onTracks;
   final VoidCallback onHelp;
   final VoidCallback onAbout;
 
-  const _AppDrawer({required this.onTracks, required this.onHelp, required this.onAbout});
+  const _AppDrawer({
+    required this.onFindStand,
+    required this.onTracks,
+    required this.onHelp,
+    required this.onAbout,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -958,6 +1047,12 @@ class _AppDrawer extends StatelessWidget {
               ),
             ),
             const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.gps_fixed, color: Color(0xFFFF6B35)),
+              title: const Text('Meilleur poste'),
+              subtitle: const Text('Selon le vent et la saison'),
+              onTap: onFindStand,
+            ),
             ListTile(
               leading: const Icon(Icons.route_outlined),
               title: const Text('Tracés'),
