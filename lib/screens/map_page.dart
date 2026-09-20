@@ -147,6 +147,11 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  void _recenterOnPosition() {
+    if (_currentPosition == null) return;
+    _mapController.move(_currentPosition!, _mapController.camera.zoom);
+  }
+
   @override
   void dispose() {
     _moveSettleTimer?.cancel();
@@ -540,6 +545,11 @@ class _MapPageState extends State<MapPage> {
                     onTap: _toggleHeadingUp,
                   ),
                 ),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 104,
+                  right: 12,
+                  child: _RecenterButton(onTap: _recenterOnPosition),
+                ),
                 if (!_drawingField)
                   const IgnorePointer(
                     child: Center(
@@ -931,6 +941,32 @@ class _NorthButton extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _RecenterButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _RecenterButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A1A).withValues(alpha: 0.88),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white24),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
+          ],
+        ),
+        child: const Icon(Icons.my_location, color: Color(0xFF4A90E2), size: 18),
       ),
     );
   }
