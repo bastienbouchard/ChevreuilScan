@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/champ.dart';
+import '../models/downloaded_zone.dart';
 import '../models/habitat_score.dart';
 import '../models/observation.dart';
 import '../models/score_level.dart';
@@ -15,20 +16,24 @@ import '../models/track.dart';
 import '../providers/arcgis_export_tile_provider.dart';
 import '../services/champ_polygon_service.dart';
 import '../services/champ_storage_service.dart';
+import '../services/connectivity_service.dart';
 import '../services/deer_habitat_service.dart';
 import '../services/deer_polygon_service.dart';
+import '../services/downloaded_zone_storage_service.dart';
 import '../services/eco_feature_parser.dart';
 import '../services/eco_label_service.dart';
 import '../services/eco_tile_service.dart';
 import '../services/field_score_service.dart';
 import '../services/observation_storage_service.dart';
 import '../services/stand_finder_service.dart';
+import '../services/tile_cache_service.dart';
 import '../services/track_storage_service.dart';
 import '../services/wind_service.dart';
 import '../widgets/champ_form_sheet.dart';
 import '../widgets/position_marker.dart';
 import 'about_page.dart';
 import 'help_page.dart';
+import 'offline_download_page.dart';
 import 'tracks_page.dart';
 
 // Au-delà de ce nombre de tuiles (0.5° x 0.5° chacune) visibles à l'écran,
@@ -92,6 +97,9 @@ class _MapPageState extends State<MapPage> {
 
   StandRecommendation? _standRecommendation;
 
+  List<DownloadedZone> _downloadedZones = [];
+  StreamSubscription<bool>? _connectivitySub;
+
   final _terresPriveesTileProvider = ArcGISExportTileProvider(
     mapServerUrl: 'https://geo.environnement.gouv.qc.ca/donnees/rest/services/Reference/Cadastre_allege/MapServer',
   );
@@ -119,6 +127,26 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  String _baseLayerLabel() {
+    switch (_baseLayer) {
+      case 'satellite':
+        switch (_satSource) {
+          case 'sentinel':
+            return 'Satellite Sentinel';
+          case 'mern':
+            return 'Satellite MRNF';
+          case 'esri':
+          default:
+            return 'Satellite ESRI';
+        }
+      case 'topo':
+        return 'Topographique';
+      case 'osm':
+      default:
+        return 'OSM';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -130,6 +158,11 @@ class _MapPageState extends State<MapPage> {
       if (h == null || !mounted) return;
       if (_headingUp) _mapController.rotate(-h);
       setState(() => _compassHeading = h);
+    });
+    ConnectivityService.instance.start();
+    TileCacheService.isOnline = ConnectivityService.instance.isOnline;
+    _connectivitySub = ConnectivityService.instance.onStatusChange.listen((online) {
+      TileCacheService.isOnline = online;
     });
   }
 
@@ -318,6 +351,7 @@ class _MapPageState extends State<MapPage> {
     _moveSettleTimer?.cancel();
     _positionStream?.cancel();
     _compassSub?.cancel();
+    _connectivitySub?.cancel();
     super.dispose();
   }
 
@@ -325,13 +359,42 @@ class _MapPageState extends State<MapPage> {
     final champs = await loadChamps();
     final observations = await loadObservations();
     final tracks = await loadTracks();
+    final zones = await loadDownloadedZones();
     setState(() {
       _champs = champs;
       _champPolygons = buildChampPolygons(champs, _season, DateTime.now());
       _observations = observations;
       _tracks = tracks;
+      _downloadedZones = zones;
       _loading = false;
     });
+  }
+
+  void _openOfflineDownloadPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => StatefulBuilder(
+          builder: (context, setPageState) => OfflineDownloadPage(
+            initialCenter: _currentPosition ?? _mapController.camera.center,
+            initialZoom: _mapController.camera.zoom,
+            baseLayerLabel: _baseLayerLabel(),
+            baseUrlTemplate: _tileUrlTemplate(),
+            tileService: _tileService,
+            zones: _downloadedZones,
+            onZoneDownloaded: (zone) {
+              setPageState(() => _downloadedZones = [..._downloadedZones, zone]);
+              setState(() {});
+              saveDownloadedZones(_downloadedZones);
+            },
+            onZoneDeleted: (zone) {
+              setPageState(() => _downloadedZones = _downloadedZones.where((z) => z.id != zone.id).toList());
+              setState(() {});
+              saveDownloadedZones(_downloadedZones);
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _addObservation(ObservationType type) async {
@@ -658,6 +721,10 @@ class _MapPageState extends State<MapPage> {
           Navigator.of(context).pop();
           _openTracksPage();
         },
+        onOfflineDownload: () {
+          Navigator.of(context).pop();
+          _openOfflineDownloadPage();
+        },
         onHelp: () {
           Navigator.of(context).pop();
           Navigator.of(context).push(MaterialPageRoute(builder: (context) => const HelpPage()));
@@ -688,6 +755,7 @@ class _MapPageState extends State<MapPage> {
                         urlTemplate: _tileUrlTemplate(),
                         userAgentPackageName: 'com.bastienbouchard.chevreuilscan',
                         maxZoom: 22,
+                        tileProvider: CachedNetworkTileProvider(),
                       ),
                     ),
                     if (_ecoVisible)
@@ -1016,12 +1084,14 @@ class _HamburgerButton extends StatelessWidget {
 class _AppDrawer extends StatelessWidget {
   final VoidCallback onFindStand;
   final VoidCallback onTracks;
+  final VoidCallback onOfflineDownload;
   final VoidCallback onHelp;
   final VoidCallback onAbout;
 
   const _AppDrawer({
     required this.onFindStand,
     required this.onTracks,
+    required this.onOfflineDownload,
     required this.onHelp,
     required this.onAbout,
   });
@@ -1057,6 +1127,12 @@ class _AppDrawer extends StatelessWidget {
               leading: const Icon(Icons.route_outlined),
               title: const Text('Tracés'),
               onTap: onTracks,
+            ),
+            ListTile(
+              leading: const Icon(Icons.download_for_offline_outlined),
+              title: const Text('Téléchargement hors-ligne'),
+              subtitle: const Text('Prépare tes cartes avant de partir'),
+              onTap: onOfflineDownload,
             ),
             ListTile(
               leading: const Icon(Icons.help_outline),

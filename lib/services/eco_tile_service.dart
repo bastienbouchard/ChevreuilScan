@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 
 import 'eco_feature_parser.dart';
+import 'eco_tile_cache_service.dart';
 import 'gzip_helper.dart';
 
 // Même bucket public R2 que EcoMap/OrignalScan — mêmes tuiles écoforestières
@@ -52,6 +55,12 @@ class EcoTileService {
 
   Future<void> _fetchTile(String tile) async {
     try {
+      final onDisk = await readCachedEcoTile(tile);
+      if (onDisk != null) {
+        await _parseAndCache(tile, onDisk);
+        return;
+      }
+
       final resp = await http
           .get(Uri.parse('$_cdnBase/$tile'))
           .timeout(const Duration(seconds: 20));
@@ -61,16 +70,42 @@ class EcoTileService {
       }
       if (resp.statusCode != 200) return;
 
-      String jsonStr;
-      try {
-        jsonStr = await decompressGzip(resp.bodyBytes);
-      } catch (_) {
-        jsonStr = utf8.decode(resp.bodyBytes);
-      }
-      final features = await compute(parseEcoFeaturesIsolate, jsonStr);
-      _cache[tile] = features;
+      await _parseAndCache(tile, resp.bodyBytes);
+      unawaited(writeCachedEcoTile(tile, resp.bodyBytes));
     } catch (_) {
       // Échec réseau ponctuel : on réessaiera au prochain déplacement de la carte.
+    }
+  }
+
+  Future<void> _parseAndCache(String tile, Uint8List gzBytes) async {
+    String jsonStr;
+    try {
+      jsonStr = await decompressGzip(gzBytes);
+    } catch (_) {
+      jsonStr = utf8.decode(gzBytes);
+    }
+    final features = await compute(parseEcoFeaturesIsolate, jsonStr);
+    _cache[tile] = features;
+  }
+
+  /// Télécharge et met en cache disque une tuile pour un usage hors-ligne
+  /// ultérieur, sans forcément peupler le cache mémoire d'affichage.
+  /// Retourne true si la tuile est disponible (déjà en cache ou téléchargée).
+  Future<bool> downloadTileForOffline(String tile) async {
+    if (await readCachedEcoTile(tile) != null) return true;
+    try {
+      final resp = await http
+          .get(Uri.parse('$_cdnBase/$tile'))
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode == 404) {
+        _missing.add(tile);
+        return false;
+      }
+      if (resp.statusCode != 200) return false;
+      await writeCachedEcoTile(tile, resp.bodyBytes);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 }
