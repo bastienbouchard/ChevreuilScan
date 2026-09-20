@@ -11,6 +11,7 @@ import '../models/habitat_score.dart';
 import '../models/observation.dart';
 import '../models/score_level.dart';
 import '../models/season.dart';
+import '../models/track.dart';
 import '../providers/arcgis_export_tile_provider.dart';
 import '../services/champ_polygon_service.dart';
 import '../services/champ_storage_service.dart';
@@ -21,8 +22,13 @@ import '../services/eco_label_service.dart';
 import '../services/eco_tile_service.dart';
 import '../services/field_score_service.dart';
 import '../services/observation_storage_service.dart';
+import '../services/track_storage_service.dart';
+import '../services/wind_service.dart';
 import '../widgets/champ_form_sheet.dart';
 import '../widgets/position_marker.dart';
+import 'about_page.dart';
+import 'help_page.dart';
+import 'tracks_page.dart';
 
 // Au-delà de ce nombre de tuiles (0.5° x 0.5° chacune) visibles à l'écran,
 // on demande à l'utilisateur de zoomer plutôt que de tout télécharger.
@@ -40,11 +46,15 @@ class MapPage extends StatefulWidget {
 class _MapPageState extends State<MapPage> {
   final MapController _mapController = MapController();
   final EcoTileService _tileService = EcoTileService();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   Season _season = Season.preRut;
   List<EcoFeature> _features = [];
   List<Champ> _champs = [];
   List<Observation> _observations = [];
+  List<Track> _tracks = [];
+  bool _recording = false;
+  List<LatLng> _trackPoints = [];
   List<Polygon> _polygons = [];
   List<Polygon> _champPolygons = [];
   List<EcoLabel> _labels = [];
@@ -74,6 +84,10 @@ class _MapPageState extends State<MapPage> {
   double _compassHeading = 0;
   StreamSubscription<Position>? _positionStream;
   StreamSubscription<CompassEvent>? _compassSub;
+
+  WindInfo? _wind;
+  bool _windFetchedWithGps = false;
+  bool _hasCenteredOnGps = false;
 
   final _terresPriveesTileProvider = ArcGISExportTileProvider(
     mapServerUrl: 'https://geo.environnement.gouv.qc.ca/donnees/rest/services/Reference/Cadastre_allege/MapServer',
@@ -107,12 +121,19 @@ class _MapPageState extends State<MapPage> {
     super.initState();
     _loadData();
     _initLocation();
+    _loadWind();
     _compassSub = FlutterCompass.events?.listen((event) {
       final h = event.heading;
       if (h == null || !mounted) return;
       if (_headingUp) _mapController.rotate(-h);
       setState(() => _compassHeading = h);
     });
+  }
+
+  Future<void> _loadWind() async {
+    final pos = _currentPosition ?? _initialCenter;
+    final wind = await fetchWind(pos.latitude, pos.longitude);
+    if (mounted) setState(() => _wind = wind);
   }
 
   Future<void> _initLocation() async {
@@ -130,8 +151,87 @@ class _MapPageState extends State<MapPage> {
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5),
     ).listen((position) {
       if (!mounted) return;
-      setState(() => _currentPosition = LatLng(position.latitude, position.longitude));
+      final pos = LatLng(position.latitude, position.longitude);
+      setState(() {
+        _currentPosition = pos;
+        if (_recording) _trackPoints = [..._trackPoints, pos];
+      });
+      if (!_windFetchedWithGps) {
+        _windFetchedWithGps = true;
+        _loadWind();
+      }
+      if (!_hasCenteredOnGps) {
+        _hasCenteredOnGps = true;
+        _mapController.move(pos, _mapController.camera.zoom);
+        _loadVisibleTiles();
+      }
     });
+  }
+
+  void _toggleRecording() {
+    if (_recording) {
+      final pts = List<LatLng>.from(_trackPoints);
+      setState(() {
+        _recording = false;
+        _trackPoints = [];
+      });
+      if (pts.length < 2) return;
+      final now = DateTime.now();
+      final defaultNom = 'Suivi ${now.day.toString().padLeft(2, '0')}/'
+          '${now.month.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}h${now.minute.toString().padLeft(2, '0')}';
+      final track = Track(
+        id: now.millisecondsSinceEpoch.toString(),
+        nom: defaultNom,
+        date: now,
+        points: pts,
+      );
+      setState(() => _tracks = [..._tracks, track]);
+      saveTracks(_tracks);
+    } else {
+      setState(() {
+        _recording = true;
+        _trackPoints = [];
+      });
+    }
+  }
+
+  void _renameTrack(Track updated) {
+    setState(() {
+      _tracks = [for (final t in _tracks) if (t.id == updated.id) updated else t];
+    });
+    saveTracks(_tracks);
+  }
+
+  void _deleteTrack(Track track) {
+    setState(() => _tracks = _tracks.where((t) => t.id != track.id).toList());
+    saveTracks(_tracks);
+  }
+
+  void _openTracksPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => StatefulBuilder(
+          builder: (context, setSheetState) => TracksPage(
+            recording: _recording,
+            recordingPointCount: _trackPoints.length,
+            tracks: _tracks,
+            onToggleRecording: () {
+              _toggleRecording();
+              setSheetState(() {});
+            },
+            onRename: (t) {
+              _renameTrack(t);
+              setSheetState(() {});
+            },
+            onDelete: (t) {
+              _deleteTrack(t);
+              setSheetState(() {});
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   void _resetNorth() {
@@ -163,10 +263,12 @@ class _MapPageState extends State<MapPage> {
   Future<void> _loadData() async {
     final champs = await loadChamps();
     final observations = await loadObservations();
+    final tracks = await loadTracks();
     setState(() {
       _champs = champs;
       _champPolygons = buildChampPolygons(champs, _season, DateTime.now());
       _observations = observations;
+      _tracks = tracks;
       _loading = false;
     });
   }
@@ -318,6 +420,97 @@ class _MapPageState extends State<MapPage> {
     await saveChamps(_champs);
   }
 
+  Future<void> _editChamp(Champ champ) async {
+    final updated = await showChampFormSheet(context, champ.polygon, existing: champ);
+    if (updated == null) return;
+    setState(() {
+      _champs = [
+        for (final c in _champs) if (c.id == champ.id) updated else c,
+      ];
+      _champPolygons = buildChampPolygons(_champs, _season, DateTime.now());
+    });
+    await saveChamps(_champs);
+  }
+
+  Future<void> _deleteChamp(Champ champ) async {
+    setState(() {
+      _champs = _champs.where((c) => c.id != champ.id).toList();
+      _champPolygons = buildChampPolygons(_champs, _season, DateTime.now());
+    });
+    await saveChamps(_champs);
+  }
+
+  void _showChampDetailSheet(Champ champ) {
+    final score = scoreField(champ, _season, DateTime.now());
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(color: score.level.color, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${score.level.label} — ${champ.crop.label}',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (score.reasons.isEmpty)
+                const Text('Aucune information disponible pour cette zone.')
+              else
+                ...score.reasons.map(
+                  (r) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('• '),
+                        Expanded(child: Text(r)),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _deleteChamp(champ);
+                    },
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Supprimer'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _editChamp(champ);
+                    },
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Modifier'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _onMapTap(TapPosition tapPosition, LatLng point) {
     if (_showLayerPanel) {
       setState(() => _showLayerPanel = false);
@@ -331,8 +524,7 @@ class _MapPageState extends State<MapPage> {
 
     final champ = findChampAtPoint(_champs, point);
     if (champ != null) {
-      final score = scoreField(champ, _season, DateTime.now());
-      _showExplanationSheet(score, subtitle: champ.crop.label);
+      _showChampDetailSheet(champ);
       return;
     }
 
@@ -395,6 +587,21 @@ class _MapPageState extends State<MapPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
+      drawer: _AppDrawer(
+        onTracks: () {
+          Navigator.of(context).pop();
+          _openTracksPage();
+        },
+        onHelp: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(MaterialPageRoute(builder: (context) => const HelpPage()));
+        },
+        onAbout: () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(MaterialPageRoute(builder: (context) => const AboutPage()));
+        },
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Stack(
@@ -515,7 +722,18 @@ class _MapPageState extends State<MapPage> {
                           CircleMarker(point: p, radius: 5, color: const Color(0xFF5D4037)),
                       ]),
                     ],
+                    if (_trackPoints.length > 1)
+                      PolylineLayer(polylines: [
+                        Polyline(points: _trackPoints, color: const Color(0xFF4A90E2), strokeWidth: 4),
+                      ]),
                   ],
+                ),
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  child: SafeArea(
+                    child: _HamburgerButton(onTap: () => _scaffoldKey.currentState?.openDrawer()),
+                  ),
                 ),
                 Positioned(
                   top: 12,
@@ -536,8 +754,14 @@ class _MapPageState extends State<MapPage> {
                     ),
                   ),
                 ),
+                if (_wind != null)
+                  Positioned(
+                    top: MediaQuery.of(context).padding.top + 60,
+                    right: 12,
+                    child: _WindIndicator(wind: _wind!, onTap: _loadWind),
+                  ),
                 Positioned(
-                  top: MediaQuery.of(context).padding.top + 60,
+                  top: MediaQuery.of(context).padding.top + 60 + (_wind != null ? 44 : 0),
                   right: 12,
                   child: _NorthButton(
                     headingUp: _headingUp,
@@ -546,7 +770,7 @@ class _MapPageState extends State<MapPage> {
                   ),
                 ),
                 Positioned(
-                  top: MediaQuery.of(context).padding.top + 104,
+                  top: MediaQuery.of(context).padding.top + 104 + (_wind != null ? 44 : 0),
                   right: 12,
                   child: _RecenterButton(onTap: _recenterOnPosition),
                 ),
@@ -673,6 +897,82 @@ class _DrawingToolbar extends StatelessWidget {
             ),
             TextButton(onPressed: onCancel, child: const Text('Annuler')),
             FilledButton(onPressed: onFinish, child: const Text('Terminer')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HamburgerButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _HamburgerButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A1A).withValues(alpha: 0.88),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white24),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
+          ],
+        ),
+        child: const Icon(Icons.menu, color: Colors.white, size: 20),
+      ),
+    );
+  }
+}
+
+class _AppDrawer extends StatelessWidget {
+  final VoidCallback onTracks;
+  final VoidCallback onHelp;
+  final VoidCallback onAbout;
+
+  const _AppDrawer({required this.onTracks, required this.onHelp, required this.onAbout});
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Image.asset('assets/logo.png', height: 40),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Chevreuil SCAN',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.route_outlined),
+              title: const Text('Tracés'),
+              onTap: onTracks,
+            ),
+            ListTile(
+              leading: const Icon(Icons.help_outline),
+              title: const Text('Aide'),
+              onTap: onHelp,
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('À propos'),
+              onTap: onAbout,
+            ),
           ],
         ),
       ),
@@ -884,6 +1184,60 @@ class _LayerPanel extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WindIndicator extends StatelessWidget {
+  final WindInfo wind;
+  final VoidCallback onTap;
+
+  const _WindIndicator({required this.wind, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A1A).withValues(alpha: 0.88),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white24),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Transform.rotate(
+              angle: (wind.deg + 180) * pi / 180,
+              child: const Icon(Icons.navigation, color: Colors.white70, size: 15),
+            ),
+            const SizedBox(width: 6),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${wind.speed.round()} km/h',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+                Text(
+                  windCardinal(wind.deg),
+                  style: const TextStyle(
+                    color: Colors.white38,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

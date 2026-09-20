@@ -3,28 +3,35 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/champ.dart';
 
-Future<Champ?> showChampFormSheet(BuildContext context, List<LatLng> polygon) {
+Future<Champ?> showChampFormSheet(
+  BuildContext context,
+  List<LatLng> polygon, {
+  Champ? existing,
+}) {
   return showModalBottomSheet<Champ>(
     context: context,
     isScrollControlled: true,
-    builder: (context) => _ChampForm(polygon: polygon),
+    builder: (context) => _ChampForm(polygon: polygon, existing: existing),
   );
 }
 
 class _ChampForm extends StatefulWidget {
   final List<LatLng> polygon;
+  final Champ? existing;
 
-  const _ChampForm({required this.polygon});
+  const _ChampForm({required this.polygon, this.existing});
 
   @override
   State<_ChampForm> createState() => _ChampFormState();
 }
 
 class _ChampFormState extends State<_ChampForm> {
-  CropType _crop = CropType.mais;
-  DateTime _harvestDate = DateTime.now();
-  final _hauteurController = TextEditingController(text: '30');
-  bool _hasBordures = false;
+  late CropType _crop = widget.existing?.crop ?? CropType.mais;
+  late DateTime _harvestDate = widget.existing?.harvestDate ?? DateTime.now();
+  late final _hauteurController = TextEditingController(
+    text: (widget.existing?.hauteurCm ?? 30).toStringAsFixed(0),
+  );
+  late bool _hasBordures = widget.existing?.hasBordures ?? false;
 
   @override
   void dispose() {
@@ -45,7 +52,7 @@ class _ChampFormState extends State<_ChampForm> {
   void _save() {
     final hauteur = double.tryParse(_hauteurController.text) ?? 0;
     final champ = Champ(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: widget.existing?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
       polygon: widget.polygon,
       crop: _crop,
       harvestDate: _harvestDate,
@@ -69,7 +76,10 @@ class _ChampFormState extends State<_ChampForm> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Nouveau champ', style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              widget.existing != null ? 'Modifier le champ' : 'Nouveau champ',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 16),
             DropdownButtonFormField<CropType>(
               value: _crop,
