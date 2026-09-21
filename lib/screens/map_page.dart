@@ -99,6 +99,7 @@ class _MapPageState extends State<MapPage> {
 
   List<DownloadedZone> _downloadedZones = [];
   StreamSubscription<bool>? _connectivitySub;
+  bool _showPrepareBanner = true;
 
   final _terresPriveesTileProvider = ArcGISExportTileProvider(
     mapServerUrl: 'https://geo.environnement.gouv.qc.ca/donnees/rest/services/Reference/Cadastre_allege/MapServer',
@@ -126,6 +127,10 @@ class _MapPageState extends State<MapPage> {
         return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
     }
   }
+
+  bool get _prepareBannerVisible => _showPrepareBanner && _downloadedZones.isEmpty;
+
+  double get _rightControlsExtraOffset => _prepareBannerVisible ? 60 : 0;
 
   String _baseLayerLabel() {
     switch (_baseLayer) {
@@ -721,6 +726,10 @@ class _MapPageState extends State<MapPage> {
           Navigator.of(context).pop();
           _openTracksPage();
         },
+        onDrawField: () {
+          Navigator.of(context).pop();
+          _toggleDrawing();
+        },
         onOfflineDownload: () {
           Navigator.of(context).pop();
           _openOfflineDownloadPage();
@@ -894,6 +903,16 @@ class _MapPageState extends State<MapPage> {
                     child: Column(
                       children: [
                         _SeasonSelector(season: _season, onChanged: _changeSeason),
+                        if (_prepareBannerVisible) ...[
+                          const SizedBox(height: 8),
+                          _PrepareMapsBanner(
+                            onDownload: () {
+                              setState(() => _showPrepareBanner = false);
+                              _openOfflineDownloadPage();
+                            },
+                            onDismiss: () => setState(() => _showPrepareBanner = false),
+                          ),
+                        ],
                         if (_tooZoomedOut) ...[
                           const SizedBox(height: 8),
                           const _InfoBanner(text: 'Zoome pour voir la carte d\'habitat'),
@@ -907,12 +926,15 @@ class _MapPageState extends State<MapPage> {
                 ),
                 if (_wind != null)
                   Positioned(
-                    top: MediaQuery.of(context).padding.top + 60,
+                    top: MediaQuery.of(context).padding.top + 60 + _rightControlsExtraOffset,
                     right: 12,
                     child: _WindIndicator(wind: _wind!, onTap: _loadWind),
                   ),
                 Positioned(
-                  top: MediaQuery.of(context).padding.top + 60 + (_wind != null ? 44 : 0),
+                  top: MediaQuery.of(context).padding.top +
+                      60 +
+                      _rightControlsExtraOffset +
+                      (_wind != null ? 44 : 0),
                   right: 12,
                   child: _NorthButton(
                     headingUp: _headingUp,
@@ -921,7 +943,10 @@ class _MapPageState extends State<MapPage> {
                   ),
                 ),
                 Positioned(
-                  top: MediaQuery.of(context).padding.top + 104 + (_wind != null ? 44 : 0),
+                  top: MediaQuery.of(context).padding.top +
+                      104 +
+                      _rightControlsExtraOffset +
+                      (_wind != null ? 44 : 0),
                   right: 12,
                   child: _RecenterButton(onTap: _recenterOnPosition),
                 ),
@@ -1010,13 +1035,6 @@ class _MapPageState extends State<MapPage> {
                   tooltip: 'Ajouter une observation',
                   child: const Icon(Icons.add_location_alt_outlined),
                 ),
-                const SizedBox(height: 12),
-                FloatingActionButton(
-                  heroTag: 'draw',
-                  onPressed: _toggleDrawing,
-                  tooltip: 'Dessiner un champ',
-                  child: const Icon(Icons.grass),
-                ),
               ],
             ),
     );
@@ -1084,6 +1102,7 @@ class _HamburgerButton extends StatelessWidget {
 class _AppDrawer extends StatelessWidget {
   final VoidCallback onFindStand;
   final VoidCallback onTracks;
+  final VoidCallback onDrawField;
   final VoidCallback onOfflineDownload;
   final VoidCallback onHelp;
   final VoidCallback onAbout;
@@ -1091,6 +1110,7 @@ class _AppDrawer extends StatelessWidget {
   const _AppDrawer({
     required this.onFindStand,
     required this.onTracks,
+    required this.onDrawField,
     required this.onOfflineDownload,
     required this.onHelp,
     required this.onAbout,
@@ -1127,6 +1147,12 @@ class _AppDrawer extends StatelessWidget {
               leading: const Icon(Icons.route_outlined),
               title: const Text('Tracés'),
               onTap: onTracks,
+            ),
+            ListTile(
+              leading: const Icon(Icons.grass),
+              title: const Text('Dessiner un champ'),
+              subtitle: const Text('Ajouter un champ agricole sur la carte'),
+              onTap: onDrawField,
             ),
             ListTile(
               leading: const Icon(Icons.download_for_offline_outlined),
@@ -1176,6 +1202,44 @@ class _InfoBanner extends StatelessWidget {
               const SizedBox(width: 8),
             ],
             Text(text, style: const TextStyle(fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrepareMapsBanner extends StatelessWidget {
+  final VoidCallback onDownload;
+  final VoidCallback onDismiss;
+
+  const _PrepareMapsBanner({required this.onDownload, required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(12),
+      color: const Color(0xFFFFF3E0),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            const Icon(Icons.map_outlined, color: Color(0xFFFF6B35)),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Prépare tes cartes avant de partir en forêt !',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ),
+            TextButton(onPressed: onDownload, child: const Text('Télécharger')),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: onDismiss,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
           ],
         ),
       ),

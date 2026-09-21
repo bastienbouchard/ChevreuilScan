@@ -54,7 +54,7 @@ class HelpPage extends StatelessWidget {
           Text('Champs', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           const Text(
-            'Le bouton en forme de feuille permet de dessiner un champ sur la '
+            '"Dessiner un champ" dans le menu permet d\'ajouter un champ sur la '
             'carte (culture, date de récolte, hauteur, bordures). Touche un champ '
             'déjà dessiné pour voir son score, le modifier ou le supprimer.',
           ),
