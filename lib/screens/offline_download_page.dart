@@ -7,16 +7,28 @@ import '../services/eco_tile_service.dart';
 import '../services/tile_cache_service.dart';
 
 const _ecoMaxTiles = 12;
-const _rasterMaxTiles = 4000;
+const _rasterMaxTilesPerLayer = 4000;
 const _rasterMinZoom = 10;
 const _rasterMaxZoom = 14;
 const _insetMargin = 28.0;
+const _previewUrlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+class _RasterLayerOption {
+  final String id;
+  final String label;
+  final String urlTemplate;
+  const _RasterLayerOption(this.id, this.label, this.urlTemplate);
+}
+
+const _rasterLayers = [
+  _RasterLayerOption('satellite', 'Satellite',
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'),
+  _RasterLayerOption('topo', 'Topographique', 'https://tile.opentopomap.org/{z}/{x}/{y}.png'),
+];
 
 class OfflineDownloadPage extends StatefulWidget {
   final LatLng initialCenter;
   final double initialZoom;
-  final String baseLayerLabel;
-  final String baseUrlTemplate;
   final EcoTileService tileService;
   final List<DownloadedZone> zones;
   final ValueChanged<DownloadedZone> onZoneDownloaded;
@@ -26,8 +38,6 @@ class OfflineDownloadPage extends StatefulWidget {
     super.key,
     required this.initialCenter,
     required this.initialZoom,
-    required this.baseLayerLabel,
-    required this.baseUrlTemplate,
     required this.tileService,
     required this.zones,
     required this.onZoneDownloaded,
@@ -40,7 +50,7 @@ class OfflineDownloadPage extends StatefulWidget {
 
 class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
   final _mapController = MapController();
-  bool _includeRaster = true;
+  final Set<String> _selectedLayerIds = {'satellite'};
   bool _downloading = false;
   bool _done = false;
   String _status = '';
@@ -64,9 +74,10 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
       _showSnack('Zone trop grande — zoome sur ton secteur de chasse précis avant de télécharger.');
       return;
     }
-    int rasterCount = 0;
-    if (_includeRaster) {
-      rasterCount = TileCacheService.instance.estimateTileCount(
+    final selectedLayers = _rasterLayers.where((l) => _selectedLayerIds.contains(l.id)).toList();
+    final estimates = <String, int>{};
+    for (final layer in selectedLayers) {
+      final count = TileCacheService.instance.estimateTileCount(
         south: insetBounds.south,
         west: insetBounds.west,
         north: insetBounds.north,
@@ -74,10 +85,11 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
         minZoom: _rasterMinZoom,
         maxZoom: _rasterMaxZoom,
       );
-      if (rasterCount > _rasterMaxTiles) {
-        _showSnack('Zone trop grande pour le fond de carte — zoome davantage.');
+      if (count > _rasterMaxTilesPerLayer) {
+        _showSnack('Zone trop grande pour la carte ${layer.label} — zoome davantage.');
         return;
       }
+      estimates[layer.id] = count;
     }
 
     final nom = await showDialog<String>(
@@ -85,7 +97,7 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
       builder: (context) {
         final ctrl = TextEditingController();
         return AlertDialog(
-          title: const Text('Nom de la zone'),
+          title: const Text('Nom du territoire'),
           content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'Ex. Secteur du lac...')),
           actions: [
             TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
@@ -111,9 +123,10 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
       setState(() => _status = 'Carte éco : tuile $ecoDone/${ecoTiles.length}');
     }
 
-    if (_includeRaster) {
+    var rasterTotal = 0;
+    for (final layer in selectedLayers) {
       await TileCacheService.instance.downloadTiles(
-        urlTemplate: widget.baseUrlTemplate,
+        urlTemplate: layer.urlTemplate,
         south: insetBounds.south,
         west: insetBounds.west,
         north: insetBounds.north,
@@ -124,10 +137,11 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
           if (!mounted) return;
           setState(() {
             _progress = total == 0 ? 1 : done / total;
-            _status = 'Fond de carte : tuile $done/$total';
+            _status = '${layer.label} : tuile $done/$total';
           });
         },
       );
+      rasterTotal += estimates[layer.id] ?? 0;
     }
 
     final zone = DownloadedZone(
@@ -135,7 +149,8 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
       nom: nom,
       date: DateTime.now(),
       tileCountEco: ecoTiles.length,
-      tileCountRaster: _includeRaster ? rasterCount : 0,
+      tileCountRaster: rasterTotal,
+      layers: ['Carte éco', ...selectedLayers.map((l) => l.label)],
     );
     widget.onZoneDownloaded(zone);
 
@@ -143,7 +158,7 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
     setState(() {
       _downloading = false;
       _done = true;
-      _status = 'Zone "$nom" téléchargée et disponible hors ligne.';
+      _status = 'Territoire "$nom" téléchargé et disponible hors ligne.';
     });
   }
 
@@ -157,7 +172,7 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Télécharger une zone')),
+      appBar: AppBar(title: const Text('Prépare ton territoire de chasse')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -184,7 +199,7 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
                           },
                         ),
                         children: [
-                          TileLayer(urlTemplate: widget.baseUrlTemplate, userAgentPackageName: 'com.bastienbouchard.chevreuilscan'),
+                          TileLayer(urlTemplate: _previewUrlTemplate, userAgentPackageName: 'com.bastienbouchard.chevreuilscan'),
                         ],
                       ),
                     ),
@@ -202,13 +217,32 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
             ),
           ),
           const SizedBox(height: 16),
-          CheckboxListTile(
+          const Text('Cartes à inclure', style: TextStyle(fontWeight: FontWeight.bold)),
+          const CheckboxListTile(
             contentPadding: EdgeInsets.zero,
-            value: _includeRaster,
-            onChanged: _downloading ? null : (v) => setState(() => _includeRaster = v ?? true),
-            title: Text('Inclure le fond de carte (${widget.baseLayerLabel})'),
-            subtitle: const Text('Zooms 10 à 14 — suffisant pour se repérer sur le terrain'),
+            value: true,
+            onChanged: null,
+            title: Text('Carte éco (habitat du chevreuil)'),
+            subtitle: Text('Toujours incluse'),
           ),
+          for (final layer in _rasterLayers)
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _selectedLayerIds.contains(layer.id),
+              onChanged: _downloading
+                  ? null
+                  : (v) => setState(() {
+                        if (v == true) {
+                          _selectedLayerIds.add(layer.id);
+                        } else {
+                          _selectedLayerIds.remove(layer.id);
+                        }
+                      }),
+              title: Text(layer.label),
+              subtitle: layer.id == 'satellite'
+                  ? const Text('Zooms 10 à 14 — repérer champs et clairières')
+                  : const Text('Zooms 10 à 14 — relief et sentiers'),
+            ),
           const SizedBox(height: 8),
           if (_downloading) ...[
             LinearProgressIndicator(value: _progress),
@@ -231,15 +265,15 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
                 _startDownload(inset);
               },
               icon: const Icon(Icons.download_for_offline_outlined),
-              label: const Text('Télécharger cette zone'),
+              label: const Text('Télécharger ce territoire'),
             ),
           const SizedBox(height: 24),
           const Divider(),
-          const Text('Zones téléchargées', style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text('Territoires téléchargés', style: TextStyle(fontWeight: FontWeight.bold)),
           if (widget.zones.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('Aucune zone téléchargée pour l\'instant.'),
+              child: Text('Aucun territoire téléchargé pour l\'instant.'),
             )
           else
             ...widget.zones.map(
@@ -248,8 +282,7 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
                 leading: const Icon(Icons.map_outlined),
                 title: Text(zone.nom),
                 subtitle: Text(
-                  '${_dateLabel(zone.date)} · ${zone.tileCountEco} tuiles éco'
-                  '${zone.tileCountRaster > 0 ? ' · ${zone.tileCountRaster} tuiles carte' : ''}',
+                  '${_dateLabel(zone.date)} · ${zone.layers.isNotEmpty ? zone.layers.join(', ') : '${zone.tileCountEco} tuiles éco'}',
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline),

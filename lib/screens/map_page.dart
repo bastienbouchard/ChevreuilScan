@@ -132,26 +132,6 @@ class _MapPageState extends State<MapPage> {
 
   double get _rightControlsExtraOffset => _prepareBannerVisible ? 60 : 0;
 
-  String _baseLayerLabel() {
-    switch (_baseLayer) {
-      case 'satellite':
-        switch (_satSource) {
-          case 'sentinel':
-            return 'Satellite Sentinel';
-          case 'mern':
-            return 'Satellite MRNF';
-          case 'esri':
-          default:
-            return 'Satellite ESRI';
-        }
-      case 'topo':
-        return 'Topographique';
-      case 'osm':
-      default:
-        return 'OSM';
-    }
-  }
-
   @override
   void initState() {
     super.initState();
@@ -382,8 +362,6 @@ class _MapPageState extends State<MapPage> {
           builder: (context, setPageState) => OfflineDownloadPage(
             initialCenter: _currentPosition ?? _mapController.camera.center,
             initialZoom: _mapController.camera.zoom,
-            baseLayerLabel: _baseLayerLabel(),
-            baseUrlTemplate: _tileUrlTemplate(),
             tileService: _tileService,
             zones: _downloadedZones,
             onZoneDownloaded: (zone) {
@@ -1156,8 +1134,8 @@ class _AppDrawer extends StatelessWidget {
             ),
             ListTile(
               leading: const Icon(Icons.download_for_offline_outlined),
-              title: const Text('Téléchargement hors-ligne'),
-              subtitle: const Text('Prépare tes cartes avant de partir'),
+              title: const Text('Prépare ton territoire de chasse'),
+              subtitle: const Text('Cartes satellite, topo et éco hors-ligne'),
               onTap: onOfflineDownload,
             ),
             ListTile(
