@@ -899,7 +899,10 @@ class _MapPageState extends State<MapPage> {
                   child: SafeArea(
                     child: Column(
                       children: [
-                        _SeasonSelector(season: _season, onChanged: _changeSeason),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: _SeasonSelector(season: _season, onChanged: _changeSeason),
+                        ),
                         if (_prepareBannerVisible) ...[
                           const SizedBox(height: 8),
                           _PrepareMapsBanner(
@@ -1566,17 +1569,48 @@ class _SeasonSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      elevation: 4,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: SegmentedButton<Season>(
-          segments: Season.values
-              .map((s) => ButtonSegment(value: s, label: Text(s.label)))
-              .toList(),
-          selected: {season},
-          onSelectionChanged: (s) => onChanged(s.first),
+    return PopupMenuButton<Season>(
+      tooltip: 'Changer de saison',
+      onSelected: onChanged,
+      position: PopupMenuPosition.under,
+      itemBuilder: (context) => [
+        for (final s in Season.values)
+          PopupMenuItem(
+            value: s,
+            child: Row(
+              children: [
+                Icon(
+                  s == season ? Icons.check : null,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(s.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(s.description, style: const TextStyle(fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.park_outlined, size: 18),
+              const SizedBox(width: 6),
+              Text(season.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const Icon(Icons.arrow_drop_down, size: 20),
+            ],
+          ),
         ),
       ),
     );
@@ -1613,7 +1647,7 @@ class _Legend extends StatelessWidget {
                 children: [
                   Icon(Icons.star, color: Color(0xFFFFC107), size: 14),
                   SizedBox(width: 4),
-                  Text('Chêne/hêtre (glands, faînes)', style: TextStyle(fontSize: 12)),
+                  Text('Chêne/hêtre', style: TextStyle(fontSize: 12)),
                 ],
               ),
             ),
