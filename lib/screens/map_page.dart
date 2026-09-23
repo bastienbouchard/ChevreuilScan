@@ -64,6 +64,7 @@ class _MapPageState extends State<MapPage> {
   List<Polygon> _polygons = [];
   List<Polygon> _champPolygons = [];
   List<EcoLabel> _labels = [];
+  List<LatLng> _mastMarkers = [];
   bool _loading = true;
   bool _loadingTiles = false;
   bool _tooZoomedOut = false;
@@ -483,6 +484,7 @@ class _MapPageState extends State<MapPage> {
       _features = features;
       _polygons = buildDeerPolygons(features, _season);
       _labels = buildEcoLabels(features);
+      _mastMarkers = mastMarkerPositions(features);
       _loadingTiles = false;
     });
   }
@@ -778,6 +780,23 @@ class _MapPageState extends State<MapPage> {
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
+                                ),
+                              ),
+                        ],
+                      ),
+                    if (_ecoVisible)
+                      MarkerLayer(
+                        markers: [
+                          for (final pos in _mastMarkers)
+                            if (_currentZoom >= 11)
+                              Marker(
+                                point: pos,
+                                width: 26,
+                                height: 26,
+                                child: const IgnorePointer(
+                                  child: Icon(Icons.star, color: Color(0xFFFFC107), size: 24, shadows: [
+                                    Shadow(color: Colors.black54, blurRadius: 3),
+                                  ]),
                                 ),
                               ),
                         ],
@@ -1577,18 +1596,28 @@ class _Legend extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: ScoreLevel.values
-              .map((level) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Row(
-                      children: [
-                        Container(width: 12, height: 12, color: level.color),
-                        const SizedBox(width: 6),
-                        Text(level.label, style: const TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                  ))
-              .toList(),
+          children: [
+            ...ScoreLevel.values.map((level) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Container(width: 12, height: 12, color: level.color),
+                      const SizedBox(width: 6),
+                      Text(level.label, style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                )),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Icon(Icons.star, color: Color(0xFFFFC107), size: 14),
+                  SizedBox(width: 4),
+                  Text('Chêne/hêtre (glands, faînes)', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -32,6 +32,19 @@ class HelpPage extends StatelessWidget {
                 ],
               ),
             ),
+          const SizedBox(height: 8),
+          const Row(
+            children: [
+              Icon(Icons.star, color: Color(0xFFFFC107), size: 18),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Étoile : peuplement avec chêne rouge ou hêtre à grandes feuilles — '
+                  'glands et faînes, la nourriture de prédilection du chevreuil à l\'automne.',
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 24),
           Text('Couches de carte', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),

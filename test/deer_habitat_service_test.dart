@@ -102,4 +102,19 @@ void main() {
     expect(result.level, ScoreLevel.faible);
     expect(result.value, 0);
   });
+
+  group('hasPreferredMast', () {
+    test('détecte le hêtre et le chêne, pas les autres essences', () {
+      expect(hasPreferredMast({'gr_ess': 'HE'}), isTrue);
+      expect(hasPreferredMast({'gr_ess': 'FIHESB'}), isTrue);
+      expect(hasPreferredMast({'gr_ess': 'CHR'}), isTrue);
+      expect(hasPreferredMast({'gr_ess': 'SBEN'}), isFalse);
+      expect(hasPreferredMast({'gr_ess': ''}), isFalse);
+    });
+
+    test('ajoute une raison informative sans changer les autres bonus', () {
+      final withMast = scoreDeerHabitat({'type_couv': 'F', 'gr_ess': 'HE', 'cl_age': '70'}, Season.preRut);
+      expect(withMast.reasons.any((r) => r.contains('glands')), isTrue);
+    });
+  });
 }

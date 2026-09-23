@@ -5,6 +5,16 @@ const int _maxPreRut = 33;
 const int _maxRut = 22;
 const int _maxPostRut = 35;
 
+// Chêne rouge et hêtre à grandes feuilles produisent glands et faînes —
+// la nourriture naturelle la plus recherchée du chevreuil à l'automne.
+// Code MFFP exact non confirmé pour ce champ (gr_ess à 2 lettres) : on
+// vérifie le préfixe ('HE'/'CH') plutôt qu'un code exact pour couvrir les
+// variantes plausibles (HE, HEG, CH, CHR, CHB) sans rater de vrais cas.
+bool hasPreferredMast(Map props) {
+  final ess = (props['gr_ess'] ?? '').toString().toUpperCase();
+  return ess.contains('HE') || ess.contains('CH');
+}
+
 int _maxForSeason(Season season) => switch (season) {
       Season.preRut => _maxPreRut,
       Season.rut => _maxRut,
@@ -63,6 +73,10 @@ HabitatScore scoreDeerHabitat(
       _maxForSeason(season),
       const ['Zone non forestière (eau ou milieu urbain)'],
     );
+  }
+
+  if (hasPreferredMast(props)) {
+    reasons.add('🌰 Chêne rouge ou hêtre — glands/faînes, nourriture de prédilection');
   }
 
   int score = switch (season) {

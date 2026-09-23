@@ -24,6 +24,23 @@ List<Polygon> buildDeerPolygons(List<EcoFeature> features, Season season) {
   return result;
 }
 
+/// Centroïdes des peuplements contenant du chêne rouge ou du hêtre à
+/// grandes feuilles (glands/faînes — nourriture de prédilection).
+List<LatLng> mastMarkerPositions(List<EcoFeature> features) {
+  final result = <LatLng>[];
+  for (final feature in features) {
+    if (feature.rings.isEmpty || !hasPreferredMast(feature.props)) continue;
+    final ring = feature.rings.first;
+    double sumLat = 0, sumLon = 0;
+    for (final p in ring) {
+      sumLat += p.latitude;
+      sumLon += p.longitude;
+    }
+    result.add(LatLng(sumLat / ring.length, sumLon / ring.length));
+  }
+  return result;
+}
+
 bool _pointInRing(LatLng point, List<LatLng> ring) {
   bool inside = false;
   final x = point.longitude, y = point.latitude;
