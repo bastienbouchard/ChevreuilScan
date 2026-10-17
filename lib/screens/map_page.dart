@@ -54,7 +54,8 @@ class _MapPageState extends State<MapPage> {
   final EcoTileService _tileService = EcoTileService();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  Season _season = Season.preRut;
+  Season _season = dominantSeason(DateTime.now());
+  final Map<Season, int> _seasonWeights = seasonWeights(DateTime.now());
   List<EcoFeature> _features = [];
   List<Champ> _champs = [];
   List<Observation> _observations = [];
@@ -95,6 +96,7 @@ class _MapPageState extends State<MapPage> {
   WindInfo? _wind;
   bool _windFetchedWithGps = false;
   bool _hasCenteredOnGps = false;
+  Timer? _fallbackLoadTimer;
 
   StandRecommendation? _standRecommendation;
 
@@ -184,9 +186,16 @@ class _MapPageState extends State<MapPage> {
       }
       if (!_hasCenteredOnGps) {
         _hasCenteredOnGps = true;
+        _fallbackLoadTimer?.cancel();
         _mapController.move(pos, _mapController.camera.zoom);
         _loadVisibleTiles();
       }
+    });
+    // Si le GPS ne répond pas rapidement (refusé, service désactivé, pas de
+    // signal), on charge quand même la carte éco par défaut après un délai
+    // plutôt que de laisser la carte vide indéfiniment.
+    _fallbackLoadTimer = Timer(const Duration(seconds: 4), () {
+      if (!_hasCenteredOnGps && mounted) _loadVisibleTiles();
     });
   }
 
@@ -338,6 +347,7 @@ class _MapPageState extends State<MapPage> {
     _positionStream?.cancel();
     _compassSub?.cancel();
     _connectivitySub?.cancel();
+    _fallbackLoadTimer?.cancel();
     super.dispose();
   }
 
@@ -734,7 +744,6 @@ class _MapPageState extends State<MapPage> {
                     initialZoom: _initialZoom,
                     onTap: _onMapTap,
                     onPositionChanged: _onMapPositionChanged,
-                    onMapReady: _loadVisibleTiles,
                   ),
                   children: [
                     Opacity(
@@ -901,7 +910,7 @@ class _MapPageState extends State<MapPage> {
                       children: [
                         Align(
                           alignment: Alignment.centerLeft,
-                          child: _SeasonSelector(season: _season, onChanged: _changeSeason),
+                          child: _SeasonSelector(season: _season, weights: _seasonWeights, onChanged: _changeSeason),
                         ),
                         if (_prepareBannerVisible) ...[
                           const SizedBox(height: 8),
@@ -1563,9 +1572,10 @@ class _RecenterButton extends StatelessWidget {
 
 class _SeasonSelector extends StatelessWidget {
   final Season season;
+  final Map<Season, int> weights;
   final ValueChanged<Season> onChanged;
 
-  const _SeasonSelector({required this.season, required this.onChanged});
+  const _SeasonSelector({required this.season, required this.weights, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -1588,7 +1598,10 @@ class _SeasonSelector extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(s.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(
+                        '${s.label} — ${weights[s] ?? 0} %',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       Text(s.description, style: const TextStyle(fontSize: 11)),
                     ],
                   ),
@@ -1607,7 +1620,7 @@ class _SeasonSelector extends StatelessWidget {
             children: [
               const Icon(Icons.park_outlined, size: 18),
               const SizedBox(width: 6),
-              Text(season.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text('${season.label} ${weights[season] ?? 0} %', style: const TextStyle(fontWeight: FontWeight.w600)),
               const Icon(Icons.arrow_drop_down, size: 20),
             ],
           ),
