@@ -272,7 +272,7 @@ class _MapPageState extends State<MapPage> {
       );
       return;
     }
-    if (_features.isEmpty) {
+    if (_features.isEmpty && _champs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Zoome sur un secteur pour charger l\'habitat avant de chercher un poste.'),
@@ -280,9 +280,29 @@ class _MapPageState extends State<MapPage> {
       );
       return;
     }
-    // Basé sur _features (le secteur actuellement visible) : zoomer ou se
-    // déplacer avant de relancer la recherche change donc les choix proposés.
-    final recs = findBestStands(features: _features, season: _season, windFromDeg: _wind!.deg);
+    // Basé sur _features/_champs (le secteur actuellement visible) : zoomer
+    // ou se déplacer avant de relancer la recherche change donc les choix
+    // proposés. Les champs agricoles sont inclus sur les 3 saisons (pas
+    // seulement pré-rut) — scoreField pondère déjà la hauteur/les bordures
+    // différemment en rut (voir discussion avec l'utilisateur).
+    final now = DateTime.now();
+    final candidates = [
+      for (final f in _features)
+        if (f.rings.isNotEmpty)
+          StandCandidate(
+            centroid: centroidOfRing(f.rings.first),
+            ratio: scoreDeerHabitat(f.props, _season).ratio,
+            zoneLabel: seasonZoneLabel(_season),
+          ),
+      for (final c in _champs)
+        if (c.polygon.isNotEmpty)
+          StandCandidate(
+            centroid: centroidOfRing(c.polygon),
+            ratio: scoreField(c, _season, now).ratio,
+            zoneLabel: 'champ de ${c.crop.label.toLowerCase()}',
+          ),
+    ];
+    final recs = findBestStands(candidates: candidates, windFromDeg: _wind!.deg);
     if (recs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Aucune zone intéressante trouvée dans le secteur visible.')),
@@ -517,7 +537,7 @@ class _MapPageState extends State<MapPage> {
       _tooZoomedOut = false;
       _loadingTiles = true;
     });
-    final features = await _tileService.loadForBounds(bounds);
+    final features = await _tileService.loadForBounds(bounds, allowNetwork: false);
     if (!mounted) return;
     setState(() {
       _features = features;

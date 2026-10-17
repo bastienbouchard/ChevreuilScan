@@ -44,22 +44,29 @@ class EcoTileService {
   final Map<String, List<EcoFeature>> _cache = {};
   final Set<String> _missing = {};
 
-  Future<List<EcoFeature>> loadForBounds(LatLngBounds bounds) async {
+  /// [allowNetwork] à false (navigation normale de la carte) : ne regarde que
+  /// le cache mémoire/disque — l'habitat ne s'affiche que pour les secteurs
+  /// déjà téléchargés via "Prépare ton territoire de chasse" (ou un lot à
+  /// bois), jamais récupéré en direct juste parce que l'utilisateur se
+  /// déplace. [allowNetwork] à true (écrans de téléchargement) : comportement
+  /// réseau normal.
+  Future<List<EcoFeature>> loadForBounds(LatLngBounds bounds, {bool allowNetwork = true}) async {
     final tiles = tilesForBounds(bounds);
     for (final tile in tiles) {
       if (_cache.containsKey(tile) || _missing.contains(tile)) continue;
-      await _fetchTile(tile);
+      await _fetchTile(tile, allowNetwork: allowNetwork);
     }
     return [for (final tile in tiles) ...?_cache[tile]];
   }
 
-  Future<void> _fetchTile(String tile) async {
+  Future<void> _fetchTile(String tile, {bool allowNetwork = true}) async {
     try {
       final onDisk = await readCachedEcoTile(tile);
       if (onDisk != null) {
         await _parseAndCache(tile, onDisk);
         return;
       }
+      if (!allowNetwork) return;
 
       final resp = await http
           .get(Uri.parse('$_cdnBase/$tile'))

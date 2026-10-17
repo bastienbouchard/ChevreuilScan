@@ -3,8 +3,6 @@ import 'dart:math';
 import 'package:latlong2/latlong.dart';
 
 import '../models/season.dart';
-import 'deer_habitat_service.dart';
-import 'eco_feature_parser.dart';
 
 class StandRecommendation {
   final int rank;
@@ -20,7 +18,18 @@ class StandRecommendation {
   });
 }
 
-LatLng _centroid(List<LatLng> ring) {
+/// Une zone candidate pour un poste d'affût — peuplement forestier ou champ
+/// agricole, peu importe : seul compte le ratio de score (0-1, comparable
+/// entre les deux systèmes de scoring) et le centroïde.
+class StandCandidate {
+  final LatLng centroid;
+  final double ratio;
+  final String zoneLabel;
+
+  const StandCandidate({required this.centroid, required this.ratio, required this.zoneLabel});
+}
+
+LatLng centroidOfRing(List<LatLng> ring) {
   double sumLat = 0, sumLon = 0;
   for (final p in ring) {
     sumLat += p.latitude;
@@ -62,48 +71,44 @@ double _distanceM(LatLng a, LatLng b) {
   return 2 * earthRadius * asin(sqrt(h));
 }
 
-String _seasonZoneLabel(Season season) => switch (season) {
+/// Texte décrivant le type de zone forestière pour une saison donnée —
+/// réutilisé par l'appelant pour construire les candidats issus de l'habitat
+/// forestier (par opposition aux champs, qui ont leur propre libellé).
+String seasonZoneLabel(Season season) => switch (season) {
       Season.preRut => 'zone de nourriture feuillue (pré-rut)',
       Season.rut => 'écotone/corridor actif (rut)',
       Season.postRut => 'zone de refuge et de couvert dense (post-rut)',
     };
 
-/// Recommande jusqu'à [maxResults] emplacements de poste d'affût à partir
-/// des polygones actuellement visibles sur la carte (donc adapté au zoom et
-/// au déplacement de l'utilisateur) : prend les meilleures zones d'habitat
-/// pour la saison, assez éloignées les unes des autres pour être de vrais
-/// choix distincts, puis positionne chaque poste sous le vent (odeur du
-/// chasseur emportée à l'opposé de la zone), à [standDistanceM] mètres de
-/// son centre.
+/// Recommande jusqu'à [maxResults] emplacements de poste d'affût à partir des
+/// zones candidates fournies (peuplements forestiers ET champs agricoles
+/// confondus — à l'appelant de construire la liste) : prend les meilleures,
+/// assez éloignées les unes des autres pour être de vrais choix distincts,
+/// puis positionne chaque poste sous le vent (odeur du chasseur emportée à
+/// l'opposé de la zone), à [standDistanceM] mètres de son centre.
 List<StandRecommendation> findBestStands({
-  required List<EcoFeature> features,
-  required Season season,
+  required List<StandCandidate> candidates,
   required double windFromDeg,
   double standDistanceM = 45,
   int maxResults = 3,
   double minSeparationM = 150,
 }) {
-  final scored = <MapEntry<EcoFeature, int>>[];
-  for (final feature in features) {
-    if (feature.rings.isEmpty) continue;
-    final score = scoreDeerHabitat(feature.props, season).value;
-    if (score > 0) scored.add(MapEntry(feature, score));
-  }
-  scored.sort((a, b) => b.value.compareTo(a.value));
+  final sorted = [...candidates]..sort((a, b) => b.ratio.compareTo(a.ratio));
 
   final standBearing = (windFromDeg + 180) % 360;
   final results = <StandRecommendation>[];
-  for (final entry in scored) {
-    final target = _centroid(entry.key.rings.first);
-    final tooClose = results.any((r) => _distanceM(r.targetZone, target) < minSeparationM);
+  for (final candidate in sorted) {
+    if (candidate.ratio <= 0) continue;
+    final tooClose =
+        results.any((r) => _distanceM(r.targetZone, candidate.centroid) < minSeparationM);
     if (tooClose) continue;
 
-    final standPos = _offset(target, standBearing, standDistanceM);
+    final standPos = _offset(candidate.centroid, standBearing, standDistanceM);
     results.add(StandRecommendation(
       rank: results.length + 1,
       position: standPos,
-      targetZone: target,
-      reason: 'Poste positionné sous le vent d\'une ${_seasonZoneLabel(season)}, '
+      targetZone: candidate.centroid,
+      reason: 'Poste positionné sous le vent d\'une ${candidate.zoneLabel}, '
           'pour que ton odeur ne porte pas vers la zone.',
     ));
     if (results.length >= maxResults) break;

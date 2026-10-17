@@ -1,35 +1,17 @@
 import 'package:chevreuilscan/models/season.dart';
-import 'package:chevreuilscan/services/eco_feature_parser.dart';
+import 'package:chevreuilscan/services/deer_habitat_service.dart';
 import 'package:chevreuilscan/services/stand_finder_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 
-EcoFeature _square(double lat, double lon, Map<String, dynamic> props) {
-  const d = 0.001;
-  return EcoFeature(props: props, rings: [
-    [
-      LatLng(lat - d, lon - d),
-      LatLng(lat - d, lon + d),
-      LatLng(lat + d, lon + d),
-      LatLng(lat + d, lon - d),
-    ],
-  ]);
+StandCandidate _candidate(double lat, double lon, double ratio, {String zoneLabel = 'zone de test'}) {
+  return StandCandidate(centroid: LatLng(lat, lon), ratio: ratio, zoneLabel: zoneLabel);
 }
 
 void main() {
   test('poste placé sous le vent (au sud si le vent vient du nord)', () {
-    final features = [
-      _square(48.0, -71.0, {
-        'type_couv': 'F',
-        'gr_ess': 'PE',
-        'origine': 'CP',
-        'cl_age': '10',
-      }),
-    ];
-
     final recs = findBestStands(
-      features: features,
-      season: Season.preRut,
+      candidates: [_candidate(48.0, -71.0, 0.8)],
       windFromDeg: 0, // vent venant du nord
     );
 
@@ -43,18 +25,8 @@ void main() {
   });
 
   test('poste placé au nord si le vent vient du sud', () {
-    final features = [
-      _square(48.0, -71.0, {
-        'type_couv': 'F',
-        'gr_ess': 'PE',
-        'origine': 'CP',
-        'cl_age': '10',
-      }),
-    ];
-
     final recs = findBestStands(
-      features: features,
-      season: Season.preRut,
+      candidates: [_candidate(48.0, -71.0, 0.8)],
       windFromDeg: 180, // vent venant du sud
     );
 
@@ -62,32 +34,20 @@ void main() {
     expect(recs.first.position.latitude, greaterThan(recs.first.targetZone.latitude));
   });
 
-  test('retourne une liste vide si aucune zone avec un score positif', () {
-    final features = [
-      _square(48.0, -71.0, {'type_eco': 'EAU'}),
-    ];
-
-    final recs = findBestStands(features: features, season: Season.preRut, windFromDeg: 0);
+  test('retourne une liste vide si aucune zone avec un ratio positif', () {
+    final recs = findBestStands(candidates: [_candidate(48.0, -71.0, 0.0)], windFromDeg: 0);
     expect(recs, isEmpty);
   });
 
-  test('retourne plusieurs choix distincts, classés par score', () {
-    final features = [
-      _square(48.00, -71.00, {
-        'type_couv': 'F',
-        'gr_ess': 'PE',
-        'origine': 'CP',
-        'cl_age': '10',
-        'cl_drai': '3',
-        'cl_dens': 'B',
-      }), // meilleur score
-      _square(48.02, -71.00, {
-        'type_couv': 'F',
-        'gr_ess': 'PE',
-      }), // score plus faible, assez loin pour être distinct
-    ];
-
-    final recs = findBestStands(features: features, season: Season.preRut, windFromDeg: 0, maxResults: 3);
+  test('retourne plusieurs choix distincts, classés par ratio', () {
+    final recs = findBestStands(
+      candidates: [
+        _candidate(48.00, -71.00, 0.9), // meilleur
+        _candidate(48.02, -71.00, 0.4), // plus faible, assez loin pour être distinct
+      ],
+      windFromDeg: 0,
+      maxResults: 3,
+    );
 
     expect(recs.length, 2);
     expect(recs[0].rank, 1);
@@ -95,28 +55,11 @@ void main() {
   });
 
   test('ignore les zones trop proches d\'un choix déjà retenu', () {
-    final features = [
-      _square(48.000, -71.000, {
-        'type_couv': 'F',
-        'gr_ess': 'PE',
-        'origine': 'CP',
-        'cl_age': '10',
-        'cl_drai': '3',
-        'cl_dens': 'B',
-      }),
-      _square(48.0005, -71.000, {
-        'type_couv': 'F',
-        'gr_ess': 'PE',
-        'origine': 'CP',
-        'cl_age': '10',
-        'cl_drai': '3',
-        'cl_dens': 'B',
-      }), // à ~55m du premier, en-deçà de minSeparationM
-    ];
-
     final recs = findBestStands(
-      features: features,
-      season: Season.preRut,
+      candidates: [
+        _candidate(48.000, -71.000, 0.9),
+        _candidate(48.0005, -71.000, 0.7), // à ~55m du premier, en-deçà de minSeparationM
+      ],
       windFromDeg: 0,
       minSeparationM: 150,
     );
@@ -125,17 +68,20 @@ void main() {
   });
 
   test('respecte maxResults', () {
-    final features = [
-      for (var i = 0; i < 5; i++)
-        _square(48.0 + i * 0.01, -71.0, {
-          'type_couv': 'F',
-          'gr_ess': 'PE',
-          'origine': 'CP',
-          'cl_age': '10',
-        }),
-    ];
-
-    final recs = findBestStands(features: features, season: Season.preRut, windFromDeg: 0, maxResults: 2);
+    final candidates = [for (var i = 0; i < 5; i++) _candidate(48.0 + i * 0.01, -71.0, 0.5)];
+    final recs = findBestStands(candidates: candidates, windFromDeg: 0, maxResults: 2);
     expect(recs, hasLength(2));
+  });
+
+  test('un champ agricole peut dominer un peuplement forestier moins bon', () {
+    final ecoRatio = scoreDeerHabitat({'type_couv': 'R', 'gr_ess': 'EN'}, Season.preRut).ratio;
+    final recs = findBestStands(
+      candidates: [
+        _candidate(48.00, -71.00, ecoRatio, zoneLabel: seasonZoneLabel(Season.preRut)),
+        _candidate(48.02, -71.00, 0.95, zoneLabel: 'champ de maïs'),
+      ],
+      windFromDeg: 0,
+    );
+    expect(recs.first.reason, contains('champ de maïs'));
   });
 }
