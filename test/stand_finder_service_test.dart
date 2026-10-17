@@ -27,16 +27,18 @@ void main() {
       }),
     ];
 
-    final rec = findBestStand(
+    final recs = findBestStands(
       features: features,
       season: Season.preRut,
       windFromDeg: 0, // vent venant du nord
     );
 
-    expect(rec, isNotNull);
+    expect(recs, hasLength(1));
+    final rec = recs.first;
+    expect(rec.rank, 1);
     // Le vent vient du nord (souffle vers le sud) → le chasseur doit être
     // au sud de la zone pour que son odeur soit emportée à l'opposé.
-    expect(rec!.position.latitude, lessThan(rec.targetZone.latitude));
+    expect(rec.position.latitude, lessThan(rec.targetZone.latitude));
     expect(rec.position.longitude, closeTo(rec.targetZone.longitude, 0.0005));
   });
 
@@ -50,22 +52,90 @@ void main() {
       }),
     ];
 
-    final rec = findBestStand(
+    final recs = findBestStands(
       features: features,
       season: Season.preRut,
       windFromDeg: 180, // vent venant du sud
     );
 
-    expect(rec, isNotNull);
-    expect(rec!.position.latitude, greaterThan(rec.targetZone.latitude));
+    expect(recs, hasLength(1));
+    expect(recs.first.position.latitude, greaterThan(recs.first.targetZone.latitude));
   });
 
-  test('retourne null si aucune zone avec un score positif', () {
+  test('retourne une liste vide si aucune zone avec un score positif', () {
     final features = [
       _square(48.0, -71.0, {'type_eco': 'EAU'}),
     ];
 
-    final rec = findBestStand(features: features, season: Season.preRut, windFromDeg: 0);
-    expect(rec, isNull);
+    final recs = findBestStands(features: features, season: Season.preRut, windFromDeg: 0);
+    expect(recs, isEmpty);
+  });
+
+  test('retourne plusieurs choix distincts, classés par score', () {
+    final features = [
+      _square(48.00, -71.00, {
+        'type_couv': 'F',
+        'gr_ess': 'PE',
+        'origine': 'CP',
+        'cl_age': '10',
+        'cl_drai': '3',
+        'cl_dens': 'B',
+      }), // meilleur score
+      _square(48.02, -71.00, {
+        'type_couv': 'F',
+        'gr_ess': 'PE',
+      }), // score plus faible, assez loin pour être distinct
+    ];
+
+    final recs = findBestStands(features: features, season: Season.preRut, windFromDeg: 0, maxResults: 3);
+
+    expect(recs.length, 2);
+    expect(recs[0].rank, 1);
+    expect(recs[1].rank, 2);
+  });
+
+  test('ignore les zones trop proches d\'un choix déjà retenu', () {
+    final features = [
+      _square(48.000, -71.000, {
+        'type_couv': 'F',
+        'gr_ess': 'PE',
+        'origine': 'CP',
+        'cl_age': '10',
+        'cl_drai': '3',
+        'cl_dens': 'B',
+      }),
+      _square(48.0005, -71.000, {
+        'type_couv': 'F',
+        'gr_ess': 'PE',
+        'origine': 'CP',
+        'cl_age': '10',
+        'cl_drai': '3',
+        'cl_dens': 'B',
+      }), // à ~55m du premier, en-deçà de minSeparationM
+    ];
+
+    final recs = findBestStands(
+      features: features,
+      season: Season.preRut,
+      windFromDeg: 0,
+      minSeparationM: 150,
+    );
+
+    expect(recs, hasLength(1));
+  });
+
+  test('respecte maxResults', () {
+    final features = [
+      for (var i = 0; i < 5; i++)
+        _square(48.0 + i * 0.01, -71.0, {
+          'type_couv': 'F',
+          'gr_ess': 'PE',
+          'origine': 'CP',
+          'cl_age': '10',
+        }),
+    ];
+
+    final recs = findBestStands(features: features, season: Season.preRut, windFromDeg: 0, maxResults: 2);
+    expect(recs, hasLength(2));
   });
 }

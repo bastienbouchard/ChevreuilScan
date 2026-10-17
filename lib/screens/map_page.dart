@@ -98,7 +98,7 @@ class _MapPageState extends State<MapPage> {
   bool _hasCenteredOnGps = false;
   Timer? _fallbackLoadTimer;
 
-  StandRecommendation? _standRecommendation;
+  List<StandRecommendation> _standRecommendations = [];
 
   List<DownloadedZone> _downloadedZones = [];
   StreamSubscription<bool>? _connectivitySub;
@@ -280,19 +280,21 @@ class _MapPageState extends State<MapPage> {
       );
       return;
     }
-    final rec = findBestStand(features: _features, season: _season, windFromDeg: _wind!.deg);
-    if (rec == null) {
+    // Basé sur _features (le secteur actuellement visible) : zoomer ou se
+    // déplacer avant de relancer la recherche change donc les choix proposés.
+    final recs = findBestStands(features: _features, season: _season, windFromDeg: _wind!.deg);
+    if (recs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Aucune zone intéressante trouvée dans le secteur visible.')),
       );
       return;
     }
-    setState(() => _standRecommendation = rec);
-    _mapController.move(rec.position, _mapController.camera.zoom);
-    _showStandSheet(rec);
+    setState(() => _standRecommendations = recs);
+    _mapController.move(recs.first.position, _mapController.camera.zoom);
+    _showStandSheet(recs);
   }
 
-  void _showStandSheet(StandRecommendation rec) {
+  void _showStandSheet(List<StandRecommendation> recs) {
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
@@ -306,16 +308,43 @@ class _MapPageState extends State<MapPage> {
                 children: [
                   const Icon(Icons.gps_fixed, color: Color(0xFFFF6B35)),
                   const SizedBox(width: 8),
-                  Text('Poste recommandé', style: Theme.of(context).textTheme.titleLarge),
+                  Text(
+                    recs.length > 1 ? 'Postes recommandés' : 'Poste recommandé',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
                 ],
               ),
-              const SizedBox(height: 12),
-              Text(rec.reason),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
               Text(
                 'Saison : ${_season.label} · Vent : ${windCardinal(_wind!.deg)} ${_wind!.speed.round()} km/h',
                 style: const TextStyle(color: Colors.grey, fontSize: 12),
               ),
+              const SizedBox(height: 12),
+              for (final rec in recs)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: InkWell(
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _mapController.move(rec.position, _mapController.camera.zoom);
+                    },
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CircleAvatar(
+                          radius: 12,
+                          backgroundColor: const Color(0xFFFF6B35),
+                          child: Text(
+                            '${rec.rank}',
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(rec.reason)),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -648,9 +677,100 @@ class _MapPageState extends State<MapPage> {
     }
 
     final feature = findFeatureAtPoint(_features, point);
+    if (_terresPriveesVisible) {
+      _showLotTapSheet(point, feature);
+      return;
+    }
     if (feature == null) return;
     final score = scoreDeerHabitat(feature.props, _season);
     _showExplanationSheet(score);
+  }
+
+  void _showLotTapSheet(LatLng point, EcoFeature? feature) {
+    final score = feature != null ? scoreDeerHabitat(feature.props, _season) : null;
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.forest_outlined, color: Color(0xFF2E7D32)),
+                  const SizedBox(width: 8),
+                  Text('Lot à bois', style: Theme.of(context).textTheme.titleLarge),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (score != null) ...[
+                Row(
+                  children: [
+                    Container(
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(color: score.level.color, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(score.level.label, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ...score.reasons.map(
+                  (r) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [const Text('• '), Expanded(child: Text(r))],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ] else
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 16),
+                  child: Text('Peuplement forestier non chargé pour l\'instant à cet endroit.'),
+                ),
+              FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _downloadStandsAroundPoint(point);
+                },
+                icon: const Icon(Icons.download_for_offline_outlined),
+                label: const Text('Télécharger les peuplements forestiers ici'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _downloadStandsAroundPoint(LatLng point) async {
+    final bounds = LatLngBounds(
+      LatLng(point.latitude - 0.001, point.longitude - 0.001),
+      LatLng(point.latitude + 0.001, point.longitude + 0.001),
+    );
+    final tiles = tilesForBounds(bounds);
+    for (final tile in tiles) {
+      await _tileService.downloadTileForOffline(tile);
+    }
+    final zone = DownloadedZone(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      nom: 'Lot à bois (${point.latitude.toStringAsFixed(3)}, ${point.longitude.toStringAsFixed(3)})',
+      date: DateTime.now(),
+      tileCountEco: tiles.length,
+      tileCountRaster: 0,
+      layers: const ['Carte éco'],
+    );
+    setState(() => _downloadedZones = [..._downloadedZones, zone]);
+    await saveDownloadedZones(_downloadedZones);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Peuplements forestiers téléchargés pour ce secteur.')),
+    );
   }
 
   void _showExplanationSheet(HabitatScore score, {String? subtitle}) {
@@ -874,22 +994,41 @@ class _MapPageState extends State<MapPage> {
                       PolylineLayer(polylines: [
                         Polyline(points: _trackPoints, color: const Color(0xFF4A90E2), strokeWidth: 4),
                       ]),
-                    if (_standRecommendation != null) ...[
+                    if (_standRecommendations.isNotEmpty) ...[
                       PolylineLayer(polylines: [
-                        Polyline(
-                          points: [_standRecommendation!.position, _standRecommendation!.targetZone],
-                          color: const Color(0xFFFF6B35),
-                          strokeWidth: 2,
-                          pattern: const StrokePattern.dotted(),
-                        ),
+                        for (final rec in _standRecommendations)
+                          Polyline(
+                            points: [rec.position, rec.targetZone],
+                            color: const Color(0xFFFF6B35),
+                            strokeWidth: 2,
+                            pattern: const StrokePattern.dotted(),
+                          ),
                       ]),
                       MarkerLayer(markers: [
-                        Marker(
-                          point: _standRecommendation!.position,
-                          width: 40,
-                          height: 40,
-                          child: const Icon(Icons.gps_fixed, color: Color(0xFFFF6B35), size: 32),
-                        ),
+                        for (final rec in _standRecommendations)
+                          Marker(
+                            point: rec.position,
+                            width: 40,
+                            height: 40,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                const Icon(Icons.gps_fixed, color: Color(0xFFFF6B35), size: 32),
+                                Positioned(
+                                  top: -2,
+                                  right: -2,
+                                  child: CircleAvatar(
+                                    radius: 9,
+                                    backgroundColor: const Color(0xFFFF6B35),
+                                    child: Text(
+                                      '${rec.rank}',
+                                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                       ]),
                     ],
                   ],
