@@ -33,6 +33,7 @@ import '../widgets/champ_form_sheet.dart';
 import '../widgets/position_marker.dart';
 import 'about_page.dart';
 import 'help_page.dart';
+import 'meteo_page.dart';
 import 'offline_download_page.dart';
 import 'tracks_page.dart';
 
@@ -158,6 +159,21 @@ class _MapPageState extends State<MapPage> {
     final pos = _currentPosition ?? _initialCenter;
     final wind = await fetchWind(pos.latitude, pos.longitude);
     if (mounted) setState(() => _wind = wind);
+  }
+
+  void _openMeteoPage() {
+    final pos = _currentPosition ?? _initialCenter;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => MeteoPage(
+          latitude: pos.latitude,
+          longitude: pos.longitude,
+          windDeg: _wind?.deg,
+          windSpeed: _wind?.speed,
+          windCached: _wind?.cached ?? false,
+        ),
+      ),
+    );
   }
 
   Future<void> _initLocation() async {
@@ -864,6 +880,10 @@ class _MapPageState extends State<MapPage> {
           Navigator.of(context).pop();
           _openOfflineDownloadPage();
         },
+        onMeteo: () {
+          Navigator.of(context).pop();
+          _openMeteoPage();
+        },
         onHelp: () {
           Navigator.of(context).pop();
           Navigator.of(context).push(MaterialPageRoute(builder: (context) => const HelpPage()));
@@ -1096,7 +1116,7 @@ class _MapPageState extends State<MapPage> {
                   Positioned(
                     top: MediaQuery.of(context).padding.top + 60 + _rightControlsExtraOffset,
                     right: 12,
-                    child: _WindIndicator(wind: _wind!, onTap: _loadWind),
+                    child: _WindIndicator(wind: _wind!, onTap: _openMeteoPage),
                   ),
                 Positioned(
                   top: MediaQuery.of(context).padding.top +
@@ -1272,6 +1292,7 @@ class _AppDrawer extends StatelessWidget {
   final VoidCallback onTracks;
   final VoidCallback onDrawField;
   final VoidCallback onOfflineDownload;
+  final VoidCallback onMeteo;
   final VoidCallback onHelp;
   final VoidCallback onAbout;
 
@@ -1280,6 +1301,7 @@ class _AppDrawer extends StatelessWidget {
     required this.onTracks,
     required this.onDrawField,
     required this.onOfflineDownload,
+    required this.onMeteo,
     required this.onHelp,
     required this.onAbout,
   });
@@ -1318,7 +1340,7 @@ class _AppDrawer extends StatelessWidget {
             ),
             ListTile(
               leading: const Icon(Icons.grass),
-              title: const Text('Dessiner un champ'),
+              title: const Text('Créer un champ agricole'),
               subtitle: const Text('Ajouter un champ agricole sur la carte'),
               onTap: onDrawField,
             ),
@@ -1327,6 +1349,12 @@ class _AppDrawer extends StatelessWidget {
               title: const Text('Prépare ton territoire de chasse'),
               subtitle: const Text('Cartes satellite, topo et éco hors-ligne'),
               onTap: onOfflineDownload,
+            ),
+            ListTile(
+              leading: const Icon(Icons.wb_sunny_outlined, color: Color(0xFFFF6B35)),
+              title: const Text('Météo'),
+              subtitle: const Text('Vent, prévisions, lune, heures de chasse'),
+              onTap: onMeteo,
             ),
             ListTile(
               leading: const Icon(Icons.help_outline),
