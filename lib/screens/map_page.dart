@@ -5,6 +5,7 @@ import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/champ.dart';
 import '../models/downloaded_zone.dart';
@@ -78,6 +79,10 @@ class _MapPageState extends State<MapPage> {
   bool _drawingField = false;
   List<LatLng> _drawingPoints = [];
   Timer? _moveSettleTimer;
+
+  bool _measuringMode = false;
+  List<LatLng> _measurePoints = [];
+  bool _useImperial = false;
 
   // Couche de fond et sources satellite/topo — même principe qu'EcoMap.
   String _baseLayer = 'osm'; // 'osm' | 'satellite' | 'topo'
@@ -176,6 +181,103 @@ class _MapPageState extends State<MapPage> {
         ),
       ),
     );
+  }
+
+  String _formatDist(double meters) {
+    if (_useImperial) {
+      final feet = meters * 3.28084;
+      return feet >= 5280 ? '${(feet / 5280).toStringAsFixed(2)} mi' : '${feet.round()} pi';
+    }
+    return meters >= 1000 ? '${(meters / 1000).toStringAsFixed(2)} km' : '${meters.round()} m';
+  }
+
+  String _measureDistanceText() {
+    if (_measurePoints.length < 2) return _useImperial ? '— pi' : '— m';
+    var total = 0.0;
+    for (var i = 0; i < _measurePoints.length - 1; i++) {
+      total += const Distance().as(LengthUnit.Meter, _measurePoints[i], _measurePoints[i + 1]);
+    }
+    return _formatDist(total);
+  }
+
+  LatLng? _parseCoords(String input) {
+    input = input.trim();
+    // Format décimal : "47.5000, -74.0000" ou "46.8123 -71.2456"
+    final dec = RegExp(r'^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$');
+    final dm = dec.firstMatch(input);
+    if (dm != null) {
+      final lat = double.tryParse(dm.group(1)!);
+      final lon = double.tryParse(dm.group(2)!);
+      if (lat != null && lon != null && lat.abs() <= 90 && lon.abs() <= 180) {
+        return LatLng(lat, lon);
+      }
+    }
+    // Format DMS : 46°48'44"N 71°14'44"W
+    final dms = RegExp(
+      "(\\d+)\\s*°\\s*(\\d+)\\s*[']\\s*(\\d+(?:\\.\\d+)?)\\s*[\"]?\\s*([NS])[,\\s]+(\\d+)\\s*°\\s*(\\d+)\\s*[']\\s*(\\d+(?:\\.\\d+)?)\\s*[\"]?\\s*([EW])",
+      caseSensitive: false,
+    );
+    final mm = dms.firstMatch(input);
+    if (mm != null) {
+      double toDec(String d, String m, String s) =>
+          double.parse(d) + double.parse(m) / 60 + double.parse(s) / 3600;
+      var lat = toDec(mm.group(1)!, mm.group(2)!, mm.group(3)!);
+      var lon = toDec(mm.group(5)!, mm.group(6)!, mm.group(7)!);
+      if (mm.group(4)!.toUpperCase() == 'S') lat = -lat;
+      if (mm.group(8)!.toUpperCase() == 'W') lon = -lon;
+      return LatLng(lat, lon);
+    }
+    return null;
+  }
+
+  void _showCoordsSearch() {
+    final ctrl = TextEditingController();
+    String? erreur;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Aller à des coordonnées'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: '47.5000, -74.0000',
+                  errorText: erreur,
+                ),
+                onSubmitted: (_) => _submitCoords(ctrl.text, ctx, setS, (e) => erreur = e),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Formats acceptés :\n47.5000, -74.0000\n47°30\'00"N 74°00\'00"W',
+                style: TextStyle(color: Colors.grey, fontSize: 11),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuler')),
+            FilledButton(
+              onPressed: () => _submitCoords(ctrl.text, ctx, setS, (e) => erreur = e),
+              child: const Text('Aller'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _submitCoords(String text, BuildContext ctx, StateSetter setS, void Function(String?) setErr) {
+    final pos = _parseCoords(text);
+    if (pos == null) {
+      setS(() => setErr('Format invalide'));
+      return;
+    }
+    Navigator.pop(ctx);
+    _mapController.move(pos, _mapController.camera.zoom < 14 ? 15 : _mapController.camera.zoom);
   }
 
   Future<void> _initLocation() async {
@@ -423,12 +525,14 @@ class _MapPageState extends State<MapPage> {
     final observations = await loadObservations();
     final tracks = await loadTracks();
     final zones = await loadDownloadedZones();
+    final prefs = await SharedPreferences.getInstance();
     setState(() {
       _champs = champs;
       _champPolygons = buildChampPolygons(champs, _season, DateTime.now());
       _observations = observations;
       _tracks = tracks;
       _downloadedZones = zones;
+      _useImperial = prefs.getBool('chevreuilscan_use_imperial') ?? false;
       _loading = false;
     });
   }
@@ -773,6 +877,11 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
+    if (_measuringMode) {
+      setState(() => _measurePoints = [..._measurePoints, point]);
+      return;
+    }
+
     final champ = findChampAtPoint(_champs, point);
     if (champ != null) {
       _showChampDetailSheet(champ);
@@ -1110,6 +1219,37 @@ class _MapPageState extends State<MapPage> {
                       PolylineLayer(polylines: [
                         Polyline(points: _trackPoints, color: const Color(0xFF4A90E2), strokeWidth: 4),
                       ]),
+                    if (_measuringMode && _measurePoints.length >= 2)
+                      PolylineLayer(polylines: [
+                        Polyline(
+                          points: _measurePoints,
+                          color: const Color(0xFFFFC107),
+                          strokeWidth: 2.5,
+                          borderColor: Colors.black45,
+                          borderStrokeWidth: 1,
+                        ),
+                      ]),
+                    if (_measuringMode && _measurePoints.isNotEmpty)
+                      MarkerLayer(
+                        markers: _measurePoints.asMap().entries.map((e) {
+                          return Marker(
+                            point: e.value,
+                            width: 18,
+                            height: 18,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: e.key == 0
+                                    ? const Color(0xFF4CAF50)
+                                    : e.key == _measurePoints.length - 1
+                                        ? const Color(0xFFFFC107)
+                                        : Colors.white,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.black54, width: 2),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
                     if (_standRecommendations.isNotEmpty) ...[
                       PolylineLayer(polylines: [
                         for (final rec in _standRecommendations)
@@ -1278,6 +1418,49 @@ class _MapPageState extends State<MapPage> {
                       ),
                     ),
                   ),
+                if (_measuringMode)
+                  Positioned(
+                    top: MediaQuery.of(context).padding.top + 64 + _rightControlsExtraOffset,
+                    left: 16,
+                    right: 16,
+                    child: _MeasuringBar(
+                      text: _measurePoints.length < 2
+                          ? 'Touche la carte pour placer des points'
+                          : _measureDistanceText(),
+                      unitLabel: _useImperial ? 'pi' : 'm',
+                      onToggleUnit: () async {
+                        setState(() => _useImperial = !_useImperial);
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool('chevreuilscan_use_imperial', _useImperial);
+                      },
+                      onClear: _measurePoints.isNotEmpty ? () => setState(() => _measurePoints.clear()) : null,
+                      onClose: () => setState(() {
+                        _measuringMode = false;
+                        _measurePoints.clear();
+                      }),
+                    ),
+                  ),
+                if (!_loading && !_drawingField)
+                  Positioned(
+                    bottom: 150,
+                    right: 12,
+                    child: SafeArea(
+                      child: _BottomToolbar(
+                        measuring: _measuringMode,
+                        onRecenter: _recenterOnPosition,
+                        onSearch: _showCoordsSearch,
+                        onToggleMeasure: () => setState(() {
+                          if (_measuringMode) {
+                            _measuringMode = false;
+                            _measurePoints.clear();
+                          } else {
+                            _measuringMode = true;
+                          }
+                        }),
+                        onLayers: () => setState(() => _showLayerPanel = !_showLayerPanel),
+                      ),
+                    ),
+                  ),
               ],
             ),
       floatingActionButton: _loading || _drawingField
@@ -1301,6 +1484,120 @@ class _MapPageState extends State<MapPage> {
                 ),
               ],
             ),
+    );
+  }
+}
+
+class _MeasuringBar extends StatelessWidget {
+  final String text;
+  final String unitLabel;
+  final VoidCallback onToggleUnit;
+  final VoidCallback? onClear;
+  final VoidCallback onClose;
+
+  const _MeasuringBar({
+    required this.text,
+    required this.unitLabel,
+    required this.onToggleUnit,
+    required this.onClear,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(10),
+      color: const Color(0xFF1A1A1A).withValues(alpha: 0.92),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.straighten, color: Color(0xFFFFC107), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                text,
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+            ),
+            GestureDetector(
+              onTap: onToggleUnit,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(6)),
+                child: Text(
+                  unitLabel,
+                  style: const TextStyle(color: Color(0xFFFFC107), fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (onClear != null)
+              GestureDetector(
+                onTap: onClear,
+                child: const Icon(Icons.refresh, color: Colors.white54, size: 20),
+              ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: onClose,
+              child: const Icon(Icons.close, color: Colors.white54, size: 20),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BottomToolbar extends StatelessWidget {
+  final bool measuring;
+  final VoidCallback onRecenter;
+  final VoidCallback onSearch;
+  final VoidCallback onToggleMeasure;
+  final VoidCallback onLayers;
+
+  const _BottomToolbar({
+    required this.measuring,
+    required this.onRecenter,
+    required this.onSearch,
+    required this.onToggleMeasure,
+    required this.onLayers,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(10),
+      color: const Color(0xFF1A1A1A).withValues(alpha: 0.88),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _toolBtn(Icons.my_location, onRecenter),
+          _divider(),
+          _toolBtn(Icons.search_rounded, onSearch),
+          _divider(),
+          _toolBtn(Icons.straighten, onToggleMeasure, active: measuring),
+          _divider(),
+          _toolBtn(Icons.layers_outlined, onLayers),
+        ],
+      ),
+    );
+  }
+
+  Widget _divider() => Container(width: 1, height: 20, color: Colors.white24);
+
+  Widget _toolBtn(IconData icon, VoidCallback onTap, {bool active = false}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: 42,
+        height: 36,
+        child: Center(
+          child: Icon(icon, color: active ? const Color(0xFFFFC107) : Colors.white70, size: 20),
+        ),
+      ),
     );
   }
 }

@@ -64,6 +64,16 @@ class HelpPage extends StatelessWidget {
             'tu regardes). Le bouton en dessous recentre la carte sur ta position.',
           ),
           const SizedBox(height: 24),
+          Text('Barre d\'outils', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          const Text(
+            'La barre sombre au-dessus des boutons flottants regroupe : recentrer '
+            'sur ta position, aller à des coordonnées précises (décimales ou '
+            'degrés-minutes-secondes), mesurer une distance (règle — touche la '
+            'carte pour placer des points, le bouton "m"/"pi" change l\'unité), '
+            'et ouvrir le panneau des couches.',
+          ),
+          const SizedBox(height: 24),
           Text('Champs', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           const Text(
