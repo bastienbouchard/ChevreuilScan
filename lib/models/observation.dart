@@ -15,6 +15,8 @@ enum ObservationType {
   camera,
   saline,
   cache,
+  pointDeau,
+  divers,
 }
 
 extension ObservationTypeStyle on ObservationType {
@@ -33,6 +35,8 @@ extension ObservationTypeStyle on ObservationType {
         ObservationType.camera => '📷',
         ObservationType.saline => '🧂',
         ObservationType.cache => '🌲',
+        ObservationType.pointDeau => '💧',
+        ObservationType.divers => '📍',
       };
 
   String get label => switch (this) {
@@ -50,6 +54,8 @@ extension ObservationTypeStyle on ObservationType {
         ObservationType.camera => 'Caméra',
         ObservationType.saline => 'Saline',
         ObservationType.cache => 'Cache',
+        ObservationType.pointDeau => 'Point d\'eau',
+        ObservationType.divers => 'Divers',
       };
 }
 
@@ -58,12 +64,14 @@ class Observation {
   final LatLng position;
   final ObservationType type;
   final DateTime timestamp;
+  final String? name;
 
   const Observation({
     required this.id,
     required this.position,
     required this.type,
     required this.timestamp,
+    this.name,
   });
 
   Map<String, dynamic> toJson() => {
@@ -72,6 +80,7 @@ class Observation {
         'lon': position.longitude,
         'type': type.name,
         'timestamp': timestamp.toIso8601String(),
+        if (name != null) 'name': name,
       };
 
   factory Observation.fromJson(Map<String, dynamic> json) => Observation(
@@ -79,5 +88,6 @@ class Observation {
         position: LatLng((json['lat'] as num).toDouble(), (json['lon'] as num).toDouble()),
         type: ObservationType.values.firstWhere((t) => t.name == json['type']),
         timestamp: DateTime.parse(json['timestamp'] as String),
+        name: json['name'] as String?,
       );
 }

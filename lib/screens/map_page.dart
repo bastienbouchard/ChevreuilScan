@@ -459,11 +459,14 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _addObservation(ObservationType type) async {
+    final name = await _promptObservationName(initial: '');
+    if (!mounted) return;
     final observation = Observation(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       position: _mapController.camera.center,
       type: type,
       timestamp: DateTime.now(),
+      name: (name != null && name.isNotEmpty) ? name : null,
     );
     setState(() => _observations = [..._observations, observation]);
     await saveObservations(_observations);
@@ -472,6 +475,46 @@ class _MapPageState extends State<MapPage> {
   Future<void> _deleteObservation(Observation observation) async {
     setState(() => _observations = _observations.where((o) => o.id != observation.id).toList());
     await saveObservations(_observations);
+  }
+
+  Future<void> _renameObservation(Observation observation) async {
+    final name = await _promptObservationName(initial: observation.name ?? '');
+    if (name == null) return;
+    final updated = Observation(
+      id: observation.id,
+      position: observation.position,
+      type: observation.type,
+      timestamp: observation.timestamp,
+      name: name.isEmpty ? null : name,
+    );
+    setState(() {
+      _observations = [
+        for (final o in _observations) if (o.id == observation.id) updated else o,
+      ];
+    });
+    await saveObservations(_observations);
+  }
+
+  Future<String?> _promptObservationName({required String initial}) {
+    final ctrl = TextEditingController(text: initial);
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Nommer ce point'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Optionnel — ex. "Talle de trèfle"'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showAddObservationSheet() {
@@ -514,7 +557,19 @@ class _MapPageState extends State<MapPage> {
                 children: [
                   Text(observation.type.emoji, style: const TextStyle(fontSize: 28)),
                   const SizedBox(width: 10),
-                  Text(observation.type.label, style: Theme.of(context).textTheme.titleLarge),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          observation.name?.isNotEmpty == true ? observation.name! : observation.type.label,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        if (observation.name?.isNotEmpty == true)
+                          Text(observation.type.label, style: const TextStyle(color: Colors.grey)),
+                      ],
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -526,16 +581,26 @@ class _MapPageState extends State<MapPage> {
                 '${observation.timestamp.minute.toString().padLeft(2, '0')}',
               ),
               const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _deleteObservation(observation);
-                  },
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('Supprimer'),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _renameObservation(observation);
+                    },
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Nommer'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _deleteObservation(observation);
+                    },
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Supprimer'),
+                  ),
+                ],
               ),
             ],
           ),
