@@ -14,6 +14,7 @@ import '../models/score_level.dart';
 import '../models/season.dart';
 import '../models/track.dart';
 import '../providers/arcgis_export_tile_provider.dart';
+import '../services/auth_service.dart';
 import '../services/champ_polygon_service.dart';
 import '../services/champ_storage_service.dart';
 import '../services/connectivity_service.dart';
@@ -33,6 +34,7 @@ import '../widgets/champ_form_sheet.dart';
 import '../widgets/position_marker.dart';
 import 'about_page.dart';
 import 'help_page.dart';
+import 'login_page.dart';
 import 'meteo_page.dart';
 import 'offline_download_page.dart';
 import 'tracks_page.dart';
@@ -892,6 +894,15 @@ class _MapPageState extends State<MapPage> {
           Navigator.of(context).pop();
           Navigator.of(context).push(MaterialPageRoute(builder: (context) => const AboutPage()));
         },
+        onSignOut: () async {
+          Navigator.of(context).pop();
+          await AuthService.signOut();
+          if (!mounted) return;
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const LoginPage()),
+            (route) => false,
+          );
+        },
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -1295,6 +1306,7 @@ class _AppDrawer extends StatelessWidget {
   final VoidCallback onMeteo;
   final VoidCallback onHelp;
   final VoidCallback onAbout;
+  final VoidCallback onSignOut;
 
   const _AppDrawer({
     required this.onFindStand,
@@ -1304,6 +1316,7 @@ class _AppDrawer extends StatelessWidget {
     required this.onMeteo,
     required this.onHelp,
     required this.onAbout,
+    required this.onSignOut,
   });
 
   @override
@@ -1319,9 +1332,23 @@ class _AppDrawer extends StatelessWidget {
                 children: [
                   Image.asset('assets/logo.png', height: 40),
                   const SizedBox(width: 12),
-                  const Text(
-                    'Chevreuil SCAN',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Chevreuil SCAN',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        if (AuthService.email != null)
+                          Text(
+                            AuthService.email!,
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -1365,6 +1392,12 @@ class _AppDrawer extends StatelessWidget {
               leading: const Icon(Icons.info_outline),
               title: const Text('À propos'),
               onTap: onAbout,
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.logout, color: Colors.grey),
+              title: const Text('Se déconnecter'),
+              onTap: onSignOut,
             ),
           ],
         ),
