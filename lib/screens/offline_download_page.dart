@@ -11,7 +11,9 @@ const _rasterMaxTilesPerLayer = 4000;
 const _rasterMinZoom = 10;
 const _rasterMaxZoom = 14;
 const _insetMargin = 28.0;
-const _previewUrlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const _previewOsmUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const _previewSatelliteUrl =
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
 class _RasterLayerOption {
   final String id;
@@ -56,6 +58,11 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
   String _status = '';
   double? _progress;
   LatLngBounds? _lastBounds;
+  bool _previewSatellite = false;
+
+  void _recenterOnPosition() {
+    _mapController.move(widget.initialCenter, widget.initialZoom);
+  }
 
   LatLngBounds _insetBounds(LatLngBounds full, Size widgetSize) {
     final fracX = _insetMargin / widgetSize.width;
@@ -180,7 +187,25 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
             'Déplace et zoome la carte pour cadrer le secteur à télécharger, '
             'à l\'intérieur du cadre orange.',
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Fond de la mini-carte :', style: TextStyle(fontSize: 12)),
+              const Spacer(),
+              ChoiceChip(
+                label: const Text('Carte'),
+                selected: !_previewSatellite,
+                onSelected: (_) => setState(() => _previewSatellite = false),
+              ),
+              const SizedBox(width: 6),
+              ChoiceChip(
+                label: const Text('Satellite'),
+                selected: _previewSatellite,
+                onSelected: (_) => setState(() => _previewSatellite = true),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           SizedBox(
             height: 280,
             child: LayoutBuilder(
@@ -199,7 +224,24 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
                           },
                         ),
                         children: [
-                          TileLayer(urlTemplate: _previewUrlTemplate, userAgentPackageName: 'com.bastienbouchard.chevreuilscan'),
+                          TileLayer(
+                            urlTemplate: _previewSatellite ? _previewSatelliteUrl : _previewOsmUrl,
+                            userAgentPackageName: 'com.bastienbouchard.chevreuilscan',
+                          ),
+                          MarkerLayer(markers: [
+                            Marker(
+                              point: widget.initialCenter,
+                              width: 20,
+                              height: 20,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF4A90E2),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: 2),
+                                ),
+                              ),
+                            ),
+                          ]),
                         ],
                       ),
                     ),
@@ -209,6 +251,16 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
                         decoration: BoxDecoration(
                           border: Border.all(color: Colors.orange, width: 2),
                         ),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: FloatingActionButton.small(
+                        heroTag: 'recenter-download',
+                        onPressed: _recenterOnPosition,
+                        tooltip: 'Recentrer sur ma position',
+                        child: const Icon(Icons.my_location),
                       ),
                     ),
                   ],
